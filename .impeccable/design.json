@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-10T19:46:44.851008+00:00",
+  "title": "Design System: QuietType",
+  "extensions": {
+    "native": {
+      "platform": "macOS 26+",
+      "frameworks": [
+        "SwiftUI",
+        "AppKit"
+      ],
+      "units": "Native logical points; frontmatter pt values describe AppKit/SwiftUI points, not browser layout.",
+      "colors": {
+        "assistance": {
+          "value": "SwiftUI.Color.teal",
+          "purpose": "Window tint, brand symbol, completed setup and ready indicator",
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        "window-surface": {
+          "value": "NSColor.windowBackgroundColor",
+          "purpose": "Detail background",
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        "text-surface": {
+          "value": "NSColor.textBackgroundColor",
+          "purpose": "Writing editor background",
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        "container-surface": {
+          "value": "SwiftUI.ShapeStyle.background",
+          "purpose": "Setup and exclusion containers",
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        "primary-ink": {
+          "value": "Native inherited primary foreground",
+          "purpose": "Main interface text",
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        "secondary-ink": {
+          "value": "SwiftUI.ShapeStyle.secondary",
+          "purpose": "Descriptions, metadata and inactive indicator",
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        "separator": {
+          "value": "SwiftUI.ShapeStyle.separator",
+          "purpose": "Custom container strokes",
+          "modifiers": {
+            "setupOpacity": 0.5,
+            "writingOpacity": 0.6
+          },
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        "status-fill": {
+          "value": "SwiftUI.ShapeStyle.quaternary",
+          "purpose": "Status capsule",
+          "opacity": 0.6,
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        "warning": {
+          "value": "SwiftUI.Color.orange",
+          "purpose": "Error symbol and background",
+          "backgroundOpacity": 0.08,
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        "host-ink-fallback": {
+          "value": "NSColor.labelColor",
+          "purpose": "Missing host color fallback",
+          "source": "Sources/QuietTypeCore/HostTextStyle.swift"
+        },
+        "ghost-ink": {
+          "value": "Host text NSColor withAlphaComponent(0.45)",
+          "purpose": "Transparent inline continuation",
+          "source": "Sources/QuietType/SuggestionPanel.swift"
+        },
+        "preview-ghost-fallback": {
+          "value": "NSColor.secondaryLabelColor",
+          "purpose": "Missing preview text color fallback",
+          "source": "Sources/QuietType/ContentView.swift"
+        }
+      },
+      "colorPolicy": "Native semantic color tokens are normative here. No fixed CSS substitutes or synthesized ramps.",
+      "typography": {
+        "semanticRoles": [
+          "headline",
+          "title2",
+          "title3",
+          "body",
+          "subheadline",
+          "callout",
+          "caption",
+          "caption2"
+        ],
+        "shortcutDesign": "Font.system(.body, design: .monospaced)",
+        "hostStyleSource": "Sources/QuietTypeCore/HostTextStyle.swift"
+      },
+      "layout": {
+        "windowDefault": [
+          920,
+          710
+        ],
+        "windowMinimum": [
+          780,
+          600
+        ],
+        "sidebarWidth": {
+          "min": 200,
+          "ideal": 215,
+          "max": 250
+        },
+        "detailMaximumWidth": 820,
+        "editorTextInset": [
+          14,
+          16
+        ],
+        "source": "Sources/QuietType/ContentView.swift"
+      },
+      "components": [
+        {
+          "name": "Sidebar",
+          "implementation": "NavigationSplitView / List(.sidebar) / Label",
+          "source": "Sources/QuietType/ContentView.swift",
+          "states": "Native selection, focus and hover"
+        },
+        {
+          "name": "Primary action",
+          "implementation": "Button.buttonStyle(.borderedProminent)",
+          "source": "Sources/QuietType/ContentView.swift",
+          "states": "Native hover, focus and disabled; generation disabled when unavailable"
+        },
+        {
+          "name": "Writing editor",
+          "refersTo": "writing-editor",
+          "implementation": "NSScrollView / PreviewTextView: NSTextView",
+          "source": "Sources/QuietType/ContentView.swift",
+          "states": "Collapsed end selection shows ghost; other selection hides it"
+        },
+        {
+          "name": "Ghost continuation",
+          "implementation": "SuggestionPanel / GhostTextView",
+          "source": "Sources/QuietType/SuggestionPanel.swift",
+          "background": "clear",
+          "shadow": false,
+          "interactive": false,
+          "maximumLines": 3,
+          "alpha": 0.45,
+          "wrapping": "Word wrap; first line caret offset; following lines at text origin"
+        },
+        {
+          "name": "Readiness",
+          "implementation": "Capsule with text and 6-point indicator",
+          "source": "Sources/QuietType/ContentView.swift",
+          "padding": {
+            "horizontal": 10,
+            "vertical": 7
+          }
+        },
+        {
+          "name": "Error banner",
+          "refersTo": "error-banner",
+          "implementation": "HStack / RoundedRectangle / plain dismiss button",
+          "source": "Sources/QuietType/ContentView.swift"
+        },
+        {
+          "name": "Menu bar controls",
+          "implementation": "MenuBarExtra / native Toggle and Button",
+          "source": "Sources/QuietType/QuietTypeApp.swift"
+        }
+      ],
+      "previewPolicy": "No HTML/CSS replicas: browser snippets cannot faithfully represent native system controls, dynamic NSColors or AppKit text layout.",
+      "evidence": {
+        "screenshot": ".impeccable/review/writing.png",
+        "scope": "Dark writing-window composition and ghost treatment only. Predates wrapping-origin and selection-visibility source fixes.",
+        "sourceAuthority": [
+          "Sources/QuietType/ContentView.swift",
+          "Sources/QuietType/SuggestionPanel.swift",
+          "Sources/QuietType/QuietTypeApp.swift",
+          "Sources/QuietTypeCore/HostTextStyle.swift"
+        ],
+        "context": [
+          "PRODUCT.md",
+          "docs/surface.md"
+        ]
+      }
+    }
+  },
+  "components": [],
+  "narrative": {
+    "northStar": "Native Mac writing assistance",
+    "overview": "QuietType is a native macOS utility built with SwiftUI and AppKit. System typography, semantic colors, SF Symbols and standard controls establish its visual language. Russian interface labels coexist with Russian and English writing. QuietType is a working name, not an established brand identity.\n\nThe writing surface belongs to the user. Suggested text continues directly from the caret in the host typeface, dimmed to distinguish it from committed text. Setup and controls live in a separate native window and menu bar menu.",
+    "keyCharacteristics": [
+      "Native sidebar navigation and system controls.",
+      "Appearance-aware surfaces with a restrained system teal tint.",
+      "Transparent, noninteractive ghost glyphs aligned with host text.",
+      "A clear title, secondary explanation and contextual action hierarchy."
+    ],
+    "rules": [
+      {
+        "name": "The Semantic Appearance Rule",
+        "body": "Preserve dynamic native color roles rather than freezing the dark screenshot into a palette.",
+        "section": "colors"
+      },
+      {
+        "name": "The Host Continuation Rule",
+        "body": "Ghost text must use the host font and text color with reduced alpha, not a separate suggestion font. `HostTextStyle` prefers attributed native font/color, then Accessibility font/color attributes. Missing host metrics fall back to a system font derived from caret height, bounded by the implementation; this is compatibility recovery, not a universal typography token.",
+        "section": "typography"
+      },
+      {
+        "name": "The Glyphs Only Rule",
+        "body": "The external suggestion panel is clear, borderless, shadowless and nonactivating. It draws only dim glyphs and ignores mouse events; never turn it into a bubble, card or tooltip.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep native semantic colors and system appearance dynamic.",
+      "Do match ghost typography, line height and origin to the text being continued.",
+      "Do use native controls, semantic type roles and SF Symbols.",
+      "Do retain text labels alongside readiness and error indicators."
+    ],
+    "donts": [
+      "Don't put ghost text in a bubble, card or shadowed panel.",
+      "Don't treat a captured dark appearance as a fixed color palette.",
+      "Don't use the settings editor's font as the universal external host font.",
+      "Don't claim the existing screenshot verifies the later wrapping and selection fixes."
+    ]
+  }
+}
