@@ -117,14 +117,29 @@ final class TypingService {
         }
         if key == 48, (flags.isEmpty || flags == .maskAlternate), !suggestion.isEmpty,
            accept(all: flags == .maskAlternate) { return true }
-        if key == 53, !suggestion.isEmpty {
+        if key == 53 {
+            let hadSuggestion = !suggestion.isEmpty
             acceptedContinuation = nil
             dismiss()
-            return true
+            return hadSuggestion
         }
         // Dismiss before the host processes a key, so Tab can never take an old suggestion.
         acceptedContinuation = nil
         dismiss()
+        if state.enabled, state.modelReady, flags.intersection([.maskCommand, .maskControl]).isEmpty {
+            // Some custom editors omit AX value notifications. A single cancellable
+            // follow-up per key reads the field after the host has handled the event.
+            // AX notifications supersede this task when the editor does send them.
+            pending = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: .milliseconds(30))
+                    try Task.checkCancellation()
+                    guard let self else { return }
+                    if observedField == nil { observeFocus() }
+                    else { schedule(manual: false) }
+                } catch { return } // Only the cancellable sleep/check above can throw.
+            }
+        }
         return false
     }
 
@@ -167,10 +182,10 @@ final class TypingService {
             }
         }
         observedField = nil
-        guard let observer, let field = readField() else { return }
-        observedField = field.element
+        guard let observer, let target = focusedTarget() else { return }
+        observedField = target.element
         for name in [kAXValueChangedNotification, kAXSelectedTextChangedNotification] {
-            AXObserverAddNotification(observer, field.element, name as CFString, Unmanaged.passUnretained(self).toOpaque())
+            AXObserverAddNotification(observer, target.element, name as CFString, Unmanaged.passUnretained(self).toOpaque())
         }
         schedule(manual: false)
     }
@@ -181,7 +196,7 @@ final class TypingService {
         return value
     }
 
-    private func readField() -> Field? {
+    private func focusedTarget() -> (element: AXUIElement, pid: pid_t)? {
         state.fieldStatus = "Ожидание доступного поля ввода"
         guard state.enabled, state.accessibilityGranted,
               let app = NSWorkspace.shared.frontmostApplication,
@@ -197,16 +212,23 @@ final class TypingService {
         let role = attribute(field, kAXRoleAttribute) as? String
         let subrole = attribute(field, kAXSubroleAttribute) as? String
         state.fieldStatus = "Проверка поля: \(role ?? "нет типа")"
-        guard [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role ?? ""),
-              subrole != kAXSecureTextFieldSubrole,
-              (attribute(field, "AXProtectedContent") as? Bool) != true,
-              let rawRange = attribute(field, kAXSelectedTextRangeAttribute),
+        guard TextFieldPolicy.shouldObserve(role: role, subrole: subrole,
+                                          protected: (attribute(field, "AXProtectedContent") as? Bool) == true) else { return nil }
+        state.activeApplication = app.localizedName ?? bundle
+        return (field, app.processIdentifier)
+    }
+
+    private func readField() -> Field? {
+        guard let target = focusedTarget() else { return nil }
+        let field = target.element
+        guard let rawRange = attribute(field, kAXSelectedTextRangeAttribute),
               CFGetTypeID(rawRange) == AXValueGetTypeID() else { return nil }
         let rangeValue = unsafeDowncast(rawRange, to: AXValue.self)
         guard AXValueGetType(rangeValue) == .cfRange else { return nil }
         var selection = CFRange()
         state.fieldStatus = "Ожидание текста перед курсором"
-        guard AXValueGetValue(rangeValue, .cfRange, &selection), selection.length == 0, selection.location >= 3 else { return nil }
+        guard AXValueGetValue(rangeValue, .cfRange, &selection),
+              TextFieldPolicy.mayGenerate(selectionLength: selection.length, prefixCount: selection.location) else { return nil }
         // Inline continuation is eligible only at the end of existing text.
         // Otherwise ghost glyphs would cover real words already in the document.
         if let count = attribute(field, kAXNumberOfCharactersAttribute) as? Int, count > selection.location {
@@ -301,7 +323,7 @@ final class TypingService {
             return nil
         }
         state.fieldStatus = "Поле готово · \(Int(style.font.pointSize)) pt · \(bounded.count) символов контекста"
-        return Field(element: field, pid: app.processIdentifier, selection: selection, prefix: bounded,
+        return Field(element: field, pid: target.pid, selection: selection, prefix: bounded,
                      caret: caret, container: container, font: style.font, color: style.color)
     }
 
@@ -334,7 +356,7 @@ final class TypingService {
                     publish(cached, field: field, id: id)
                     return
                 }
-                let result = try await state.engine.complete(prefix: field.prefix, maxTokens: policy.maxTokens) { [weak self] partial in
+                let result = try await state.engine.complete(prefix: field.prefix, maxTokens: policy.maxTokens, maxWords: policy.maxWords) { [weak self] partial in
                     Task { @MainActor in self?.publishPartial(partial, id: id) }
                 }
                 try Task.checkCancellation()

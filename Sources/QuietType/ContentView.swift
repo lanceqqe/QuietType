@@ -242,7 +242,7 @@ struct ContentView: View {
             }
             Section("Текущие ограничения") {
                 LabeledContent("Пауза после ввода", value: "\(state.policy.debounceMilliseconds) мс")
-                LabeledContent("Длина продолжения", value: "До \(state.policy.maxTokens) токенов")
+                LabeledContent("Длина продолжения", value: "До \(state.policy.maxWords) слов")
                 LabeledContent("Контекст", value: "До \(state.policy.contextCharacters) символов")
                 LabeledContent("Энергосбережение macOS", value: ProcessInfo.processInfo.isLowPowerModeEnabled ? "Включено" : "Выключено")
             }

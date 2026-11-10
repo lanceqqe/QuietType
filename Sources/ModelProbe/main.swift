@@ -17,6 +17,9 @@ try await model.load(from: directory)
 print("Loaded in \(start.duration(to: .now)); compute units: CPU + Neural Engine")
 for prefix in ["Привет! Хотел бы обсудить с тобой", "Спасибо за письмо. Мы свяжемся с вами", "Thank you for your message. I will", "Давай встретимся завтра и обсудим"] {
     let result = try await model.complete(prefix: prefix, maxTokens: 12)
+    guard !result.text.isEmpty, result.text.split(whereSeparator: \.isWhitespace).count <= 3 else {
+        throw NSError(domain: "ModelProbe.WordLimit", code: 2, userInfo: [NSLocalizedDescriptionKey: "Expected a nonempty completion of at most three words"])
+    }
     print("\(prefix) → \(result.text) | \(Int(result.milliseconds)) ms / \(result.tokenCount) tokens")
     let warm = try await model.complete(prefix: prefix + CompletionText.nextWord(result.text), maxTokens: 8)
     print("  warm: \(warm.text) | \(Int(warm.milliseconds)) ms / reused \(warm.reusedTokens)")

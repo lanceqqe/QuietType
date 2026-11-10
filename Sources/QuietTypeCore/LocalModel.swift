@@ -87,12 +87,13 @@ public actor LocalModel {
     }
 
     public func complete(
-        prefix: String, maxTokens: Int,
+        prefix: String, maxTokens: Int, maxWords: Int = 3,
         onPartial: (@Sendable (String) -> Void)? = nil
     ) throws -> InferenceResult {
         guard let tokenizer, model != nil else { throw ModelFailure.missingFiles }
         let start = ContinuousClock.now
         let budget = min(32, max(1, maxTokens))
+        let wordLimit = min(3, max(1, maxWords))
         let tokens = Array(tokenizer.encode(text: prefix, addSpecialTokens: false).suffix(contextLength - budget))
         guard !tokens.isEmpty else { throw ModelFailure.emptyContext }
         var common = 0
@@ -139,12 +140,13 @@ public actor LocalModel {
             let text = tokenizer.decode(tokens: generated)
             if text.contains("\n") { break }
             // UTF-8 token fragments are decoded together; never publish broken Cyrillic.
-            let display = CompletionText.finished(text, reachedLimit: true)
+            let display = CompletionText.firstWords(CompletionText.finished(text, reachedLimit: true), count: wordLimit)
             let wordCount = display.split(whereSeparator: \.isWhitespace).count
             if !text.contains("�"), wordCount > publishedWordCount {
                 onPartial?(display)
                 publishedWordCount = wordCount
             }
+            if wordCount >= wordLimit { break }
             reachedLimit = step + 1 == budget
             if step + 1 < budget {
                 predicted = try predict(token, at: processed.count)
@@ -154,7 +156,7 @@ public actor LocalModel {
         }
         let elapsed = start.duration(to: .now)
         let milliseconds = Double(elapsed.components.seconds) * 1_000 + Double(elapsed.components.attoseconds) / 1e15
-        return InferenceResult(text: CompletionText.finished(tokenizer.decode(tokens: generated), reachedLimit: reachedLimit),
+        return InferenceResult(text: CompletionText.firstWords(CompletionText.finished(tokenizer.decode(tokens: generated), reachedLimit: reachedLimit), count: wordLimit),
                                tokenCount: generated.count, milliseconds: milliseconds, reusedTokens: reused)
     }
 

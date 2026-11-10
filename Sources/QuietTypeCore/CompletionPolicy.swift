@@ -1,6 +1,31 @@
 import Foundation
 
+public enum TextFieldPolicy {
+    /// Observation starts on focus, including an empty field. Generation has its own threshold.
+    public static func shouldObserve(role: String?, subrole: String?, protected: Bool) -> Bool {
+        ["AXTextField", "AXTextArea", "AXComboBox"].contains(role ?? "") &&
+            subrole != "AXSecureTextField" && !protected
+    }
+
+    public static func mayGenerate(selectionLength: Int, prefixCount: Int) -> Bool {
+        selectionLength == 0 && prefixCount >= 3
+    }
+}
+
 public enum CompletionText {
+    public static func firstWords(_ text: String, count: Int) -> String {
+        guard count > 0 else { return "" }
+        var remaining = text
+        var result = ""
+        for _ in 0..<count {
+            let word = nextWord(remaining)
+            if word.isEmpty { break }
+            result += word
+            remaining.removeFirst(word.count)
+        }
+        return result
+    }
+
     public static func nextWord(_ text: String) -> String {
         let leading = text.prefix(while: \.isWhitespace)
         let word = text.dropFirst(leading.count).prefix(while: { !$0.isWhitespace })
@@ -47,6 +72,7 @@ public enum ThermalLevel: Sendable { case nominal, fair, serious, critical }
 public struct EnergyPolicy: Sendable {
     public let debounceMilliseconds: Int
     public let maxTokens: Int
+    public let maxWords: Int
     public let contextCharacters: Int
     public let allowsAutomatic: Bool
 
@@ -54,6 +80,7 @@ public struct EnergyPolicy: Sendable {
         let constrained = lowPower || mode == .economy || thermal == .serious
         debounceMilliseconds = constrained ? 700 : (mode == .responsive ? 220 : 400)
         maxTokens = constrained ? 8 : 16
+        maxWords = constrained ? 2 : 3
         contextCharacters = constrained ? 160 : 320
         allowsAutomatic = thermal != .critical
     }

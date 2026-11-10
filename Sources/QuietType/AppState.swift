@@ -151,13 +151,14 @@ final class AppState {
         error = nil
         let prefix = String(playground.suffix(policy.contextCharacters))
         let tokens = policy.maxTokens
+        let words = policy.maxWords
         let delay = policy.debounceMilliseconds
         let id = playgroundRequestID
         playgroundTask = Task {
             defer { if playgroundRequestID == id { playgroundBusy = false } }
             do {
                 if afterDelay { try await Task.sleep(for: .milliseconds(delay)) }
-                let result = try await engine.complete(prefix: prefix, maxTokens: tokens)
+                let result = try await engine.complete(prefix: prefix, maxTokens: tokens, maxWords: words)
                 try Task.checkCancellation()
                 guard playgroundRequestID == id else { return }
                 playgroundSuggestion = result.text

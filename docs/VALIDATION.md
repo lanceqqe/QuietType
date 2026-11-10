@@ -31,3 +31,10 @@ The updated Telegram appearance still needs confirmation in the user's live typi
 - CPU/ANE operator placement fraction, joules per suggestion and comparative Cotypist latency were not measured. `.cpuAndNeuralEngine` excludes GPU but does not prove that every operation uses ANE.
 - macOS 26 compatibility is based on deployment target and APIs; this session ran on macOS 27.2.
 - Screen context, model comparison research and personalization were deferred by the user.
+
+## Follow-up: empty-field regression and short completions
+
+- Reproduced a structural bug: focus observation was incorrectly gated on an already nonempty generation context, so an empty newly focused field never subscribed to value/selection changes. Split focus eligibility from generation eligibility; password/protected fields remain excluded. Added regression tests.
+- Added a cancellable, one-shot 30 ms post-key follow-up for custom editors that omit Accessibility change notifications. It is superseded by real AX events and creates no idle polling. Escape cancels pending work without rescheduling it.
+- Default output is capped at three words; economy/Low Power/thermal-constrained output at two. Generation ends when the word boundary is available, rather than generating a long answer and clipping it only in the UI.
+- 13 Swift Testing tests pass. Real ModelProbe returns no more than three words on all four Russian/English cases and still matches warm vs reset KV output. On this M5 run, model calls took 63–138 ms and warm calls 47–95 ms; these are latency measurements, not energy measurements.

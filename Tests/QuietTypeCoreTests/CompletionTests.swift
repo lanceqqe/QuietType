@@ -70,3 +70,24 @@ import AppKit
     let style = HostTextStyle(attributes: [.font: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)], caretHeight: 20)
     #expect(style.font.pointSize == 14)
 }
+
+@Test func observesEmptyEditableFieldsBeforeThereIsEnoughTextToGenerate() {
+    #expect(TextFieldPolicy.shouldObserve(role: "AXTextArea", subrole: nil, protected: false))
+    #expect(!TextFieldPolicy.mayGenerate(selectionLength: 0, prefixCount: 0))
+    #expect(TextFieldPolicy.mayGenerate(selectionLength: 0, prefixCount: 3))
+    #expect(!TextFieldPolicy.mayGenerate(selectionLength: 2, prefixCount: 20))
+}
+
+@Test func neverObservesPasswordFields() {
+    #expect(!TextFieldPolicy.shouldObserve(role: "AXTextField", subrole: "AXSecureTextField", protected: false))
+    #expect(!TextFieldPolicy.shouldObserve(role: "AXTextArea", subrole: nil, protected: true))
+    #expect(!TextFieldPolicy.shouldObserve(role: "AXButton", subrole: nil, protected: false))
+}
+
+@Test func defaultSuggestionHasAtMostThreeWords() {
+    #expect(CompletionText.firstWords(" обсудить проект завтра утром", count: 3) == " обсудить проект завтра")
+    #expect(CompletionText.firstWords(" review the project tomorrow", count: 3) == " review the project")
+    #expect(CompletionText.firstWords("вет, как дела? Хорошо", count: 3) == "вет, как дела?")
+    #expect(CompletionText.firstWords(" два слова", count: 3) == " два слова")
+    #expect(CompletionText.firstWords(" текст", count: 0) == "")
+}

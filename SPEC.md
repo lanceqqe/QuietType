@@ -29,6 +29,8 @@ try Task.checkCancellation()
 - No idle polling for text; debounce changes and keep at most one inference active.
 - Tab inserts one word, Option-Tab inserts the suggestion; Escape dismisses. Insert only after revalidating focus, text and selection.
 - Suggestions are dim inline ghost text, with the host font when available, no bubble, border or badge. Preserve the remainder after word acceptance.
+- Default completion is at most three words; constrained energy modes use at most two. Stop inference at the completed word boundary instead of producing a long continuation.
+- Observe editable fields on focus even when empty; only generation waits for three input characters. Custom editors without AX notifications receive a single cancellable post-key follow-up, never idle polling.
 - Never read secure/password fields; default exclusion of password managers and terminals. Never log or persist typed text.
 - Respect low power and thermal state; bound context and output; release model when explicitly unloaded.
 - No cloud text requests. Network is only for explicit model setup.
