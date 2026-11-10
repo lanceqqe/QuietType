@@ -56,7 +56,7 @@ The writing surface belongs to the user. Suggested text continues directly from 
 - Transparent, noninteractive ghost glyphs aligned with host text.
 - A clear title, secondary explanation and contextual action hierarchy.
 
-Evidence: `Sources/QuietType/ContentView.swift`, `Sources/QuietType/SuggestionPanel.swift`, `Sources/QuietType/QuietTypeApp.swift`, and `Sources/QuietTypeCore/HostTextStyle.swift`. `PRODUCT.md` establishes native platform and system appearance; `docs/surface.md` records the surface direction. `.impeccable/review/writing.png` supports the dark writing-window composition and inline ghost treatment. It predates the source fixes for wrapped-line alignment and hiding the ghost on selection; those behaviors are documented from source, not verified by that image.
+Evidence: `Sources/QuietType/ContentView.swift`, `Sources/QuietType/SuggestionPanel.swift`, `Sources/QuietType/QuietTypeApp.swift`, and `Sources/QuietTypeCore/HostTextStyle.swift`. `PRODUCT.md` establishes native platform and system appearance; `docs/surface.md` records the surface direction. `.impeccable/review/writing-fixed.png` supports the dark writing-window composition, baseline and wrapped-line alignment. `writing-caret-middle.png` verifies that moving the caret into existing text hides the continuation. External Telegram layout remains a separate manual compatibility check.
 
 ## Colors
 
@@ -119,7 +119,7 @@ Setup rows pair an icon, title, secondary explanation and contextual action, div
 
 The writing field is a plain AppKit `NSTextView` in an `NSScrollView`, not a fake text input. Ghost text is an inert drawing overlay rather than committed editor content. It uses foreground alpha 0.45, word wrapping and at most three lines. The external panel is constrained to host container and visible screen bounds. Its first line starts at the caret and following lines return to the container's text origin.
 
-In the preview, show ghost text only for a collapsed selection at the end of the text; hide it when selecting or moving the caret elsewhere. Source includes the native line-fragment offset in wrapped-line placement. Recheck those two behaviors in a fresh runtime capture before claiming visual verification.
+In the preview, show ghost text only for a collapsed selection at the end of the text; hide it when selecting or moving the caret elsewhere. Source includes the native line-fragment offset in wrapped-line placement. Both behaviors were verified in the final writing-fixed and writing-caret-middle runtime captures; see docs/DESIGN_REVIEW.md for the scoped review verdict.
 
 ## Do's and Don'ts
 
