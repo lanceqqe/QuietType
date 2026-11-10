@@ -73,6 +73,8 @@ public actor LocalModel {
     private let batch = 64
     /// Where the loaded model runs; empty until loaded.
     public private(set) var computeUnits = ""
+    /// Why a preferred compute unit was skipped during the last load, for the diagnostic log.
+    public private(set) var loadNotes: [String] = []
 
     public init() {}
 
@@ -98,6 +100,7 @@ public actor LocalModel {
         ]
         var loadedParts: (embedding: MLModel, chunks: [(infer: MLModel, prefill: MLModel)], head: MLModel)?
         var failure: Error = ModelFailure.incompatibleModel
+        loadNotes = []
         for (units, title) in attempts.dropFirst(neuralEngine ? 0 : 1) {
             func loadPart(_ name: String, function: String? = nil) throws -> MLModel {
                 let config = MLModelConfiguration()
@@ -117,7 +120,12 @@ public actor LocalModel {
                 break
             } catch is CancellationError {
                 throw CancellationError()
-            } catch { failure = error }
+            } catch {
+                failure = error
+                let detail = error as NSError
+                let cause = (detail.userInfo[NSUnderlyingErrorKey] as? NSError).map { " ← \($0.domain) \($0.code): \($0.localizedDescription)" } ?? ""
+                loadNotes.append("\(title) rejected: \(detail.domain) \(detail.code): \(detail.localizedDescription)\(cause)")
+            }
         }
         guard let loadedParts else { throw failure }
         let embeddingModel = loadedParts.embedding

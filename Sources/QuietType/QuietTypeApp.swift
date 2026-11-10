@@ -54,6 +54,7 @@ private struct MenuContent: View {
         Text(updater.status.isEmpty ? "Версия \(Updater.currentVersion)" : updater.status)
         Button("Проверить обновления") { Task { await updater.check(install: true) } }.disabled(updater.busy)
         Toggle("Обновляться автоматически", isOn: $updater.automatic)
+        Button("Показать журнал для отчёта об ошибке") { state.revealLogs() }
         Divider()
         Button("Завершить QuietType") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }

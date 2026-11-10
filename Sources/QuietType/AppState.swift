@@ -26,11 +26,31 @@ final class AppState {
         didSet { if fieldStatus != oldValue { log(fieldStatus) } }
     }
     /// Diagnostic trace of pipeline stages: app name, stage, lengths. Never typed text.
+    nonisolated static let logURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Logs/QuietType.log")
     @ObservationIgnored private let logHandle: FileHandle? = {
-        let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/QuietType.log")
-        FileManager.default.createFile(atPath: url.path, contents: nil) // truncated on every launch
-        return try? FileHandle(forWritingTo: url)
+        // One file per launch; the previous launch is kept next to it for bug reports.
+        let fm = FileManager.default
+        let previous = logURL.deletingLastPathComponent().appendingPathComponent("QuietType.previous.log")
+        try? fm.removeItem(at: previous)
+        try? fm.moveItem(at: logURL, to: previous)
+        try? fm.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        fm.createFile(atPath: logURL.path, contents: nil)
+        let handle = try? FileHandle(forWritingTo: logURL)
+        var size = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        var chip = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("machdep.cpu.brand_string", &chip, &size, nil, 0)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let memory = ProcessInfo.processInfo.physicalMemory / 1_073_741_824
+        handle?.write(Data("QuietType \(version) · macOS \(ProcessInfo.processInfo.operatingSystemVersionString) · \(String(cString: chip)) · \(memory) GB · \(Bundle.main.bundlePath)\n".utf8))
+        return handle
     }()
+    /// Selects both log files in Finder so they can be sent as they are.
+    func revealLogs() {
+        let previous = Self.logURL.deletingLastPathComponent().appendingPathComponent("QuietType.previous.log")
+        NSWorkspace.shared.activateFileViewerSelecting([Self.logURL, previous].filter { FileManager.default.fileExists(atPath: $0.path) })
+    }
     func log(_ message: String) {
         let time = Date().formatted(.dateTime.hour().minute().second().secondFraction(.fractional(3)))
         logHandle?.write(Data("\(time) [\(activeApplication)] \(message)\n".utf8))
@@ -128,18 +148,22 @@ final class AppState {
         error = nil
         modelTask = Task {
             defer { loading = false; modelTask = nil }
+            let started = ContinuousClock.now
             do {
+                defer { Task { for note in await engine.loadNotes { log("model: \(note)") } } }
                 try await engine.load(from: ModelAssets.directory)
                 try Task.checkCancellation()
                 computeUnits = await engine.computeUnits
+                log("model: loaded in \(started.duration(to: .now).components.seconds) s")
                 // The first call compiles kernels (tens of seconds on the GPU fallback);
                 // pay for it now instead of on the user's first suggestion.
                 _ = try? await engine.complete(prefix: "Привет, как", maxTokens: 2)
                 await engine.resetContext()
-                log("model loaded on \(computeUnits)")
+                log("model: ready on \(computeUnits)")
                 modelReady = true
             } catch is CancellationError {} catch {
                 self.error = "Не удалось загрузить модель: \(error.localizedDescription)"
+                log("model: load failed: \(error)")
             }
         }
     }
@@ -160,6 +184,7 @@ final class AppState {
                 installing = false; modelTask = nil
             } catch {
                 self.error = error.localizedDescription
+                log("model: install failed: \(error)")
                 installing = false; modelTask = nil
             }
         }

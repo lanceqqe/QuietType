@@ -539,6 +539,7 @@ final class TypingService {
                 if result.text.isEmpty { suggestion = ""; panel.hide() }
                 else { publish(result.text, field: field, id: id) }
             } catch is CancellationError {} catch {
+                state.log("completion failed: \(error)")
                 if requestID == id { state.error = error.localizedDescription; dismiss() }
             }
         }
