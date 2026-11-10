@@ -38,3 +38,50 @@ The updated Telegram appearance still needs confirmation in the user's live typi
 - Added a cancellable, one-shot 30 ms post-key follow-up for custom editors that omit Accessibility change notifications. It is superseded by real AX events and creates no idle polling. Escape cancels pending work without rescheduling it.
 - Default output is capped at three words; economy/Low Power/thermal-constrained output at two. Generation ends when the word boundary is available, rather than generating a long answer and clipping it only in the UI.
 - 13 Swift Testing tests pass. Real ModelProbe returns no more than three words on all four Russian/English cases and still matches warm vs reset KV output. On this M5 run, model calls took 63–138 ms and warm calls 47–95 ms; these are latency measurements, not energy measurements.
+
+## Follow-up: Telegram, loops, latency, Tab in browsers
+
+- Accessibility probe of Telegram for macOS (`ru.keepcoder.Telegram`): the focused element is the `AXWindow`; the tree contains no text area for the message field. Suggestions there now come from a keystroke buffer and are shown as a pill. **Not verified live**: typing into the user's chats was deliberately not automated.
+- Decoder: token healing, repeated n-gram blocking, confidence cut-off. `ModelProbe --try --loop` on four phrases: accepting suggestions 40 times in a row no longer cycles; generation stops with an empty suggestion instead. Warm and cold KV results still match. Model calls on M5: 40–145 ms.
+- Latency: debounce 400 → 110 ms (50 in responsive mode); one field read per request instead of one per notification, partial and final result; typed-through suggestions need no inference; context window start moves in blocks so the KV cache is reused in long texts.
+- Tab: a visible suggestion consumes Tab without Accessibility calls inside the event tap (the previous revalidation could fail or time the tap out in browsers, letting Tab through). Web content is inserted with Unicode key events. **Not verified live** in Chrome/Safari in this session.
+- 17 Swift Testing tests pass.
+
+## Telegram, corrected diagnosis
+
+The earlier probe ran while the message field was not focused; the conclusion that Telegram hides the field was wrong. Live log from the user's typing: Telegram exposes an `AXTextArea`, but its caret rectangle sits exactly one caret height above the text (caret y 116–132 in a field spanning 95–121), which failed the caret-inside-field check and suppressed the suggestion. Telegram's caret is now shifted down by one line; other hosts with an out-of-field caret fall back to the pill. Telegram was removed from the keystroke-fallback list. `~/Library/Logs/QuietType.log` records pipeline stages without typed text.
+
+## Follow-up: model comparison and switch to Gemma 3 1B
+
+Goal: more sensible Russian suggestions within roughly 200 ms per call. Same decoder for every model; 20 prefixes (12 Russian, 8 English, 6 cut mid-word) via `ModelProbe --try`, cold KV per phrase, up to three words, after a warm-up run. Raw logs: `.model-cache/cmp-*.log`.
+
+| Model (ANEMLL, 6-bit) | Download | FFN chunks / LM head | Call time, 20 phrases | Per token |
+|---|---|---|---|---|
+| Qwen3 0.6B ctx512 (previous) | 0.76 GB | 1 / 16 logit slices | 40–146 ms | ≈15 ms |
+| Qwen3 1.7B ctx2048 | 1.95 GB | 2 / 16 logit slices | 133–713 ms | ≈40 ms |
+| Gemma 3 1B it ctx4096 (chosen) | 1.43 GB | 1 / argmax, 16 slices | 49–132 ms | ≈16 ms |
+
+- Quality, judged by reading the outputs (not a metric): Qwen3 0.6B produced «в ближней районе», «с отвелем на», «обсудим обсуждение о» and three empty suggestions. Qwen3 1.7B and Gemma 3 1B both produced grammatical, plausible Russian on all 12 Russian prefixes, with one exception each way: Gemma completed «на соглас» as «согласность» (1.7B: «согласование») and «late repl» as «replies» (both Qwens: «reply»).
+- Qwen3 1.7B was rejected on latency only: typical suggestions took 280–520 ms.
+- Gemma 3 4B QAT (4.4 GB, three FFN chunks) was not downloaded or measured.
+- `LocalModel` now discovers the layout from the model directory: FFN chunk count with one KV state per chunk, causal-mask width, LM head kind, stop tokens, BOS. Context use is capped at 512 tokens, which also keeps Gemma inside its 512-token local-attention window, so the conversion's `*_rotate` functions are never needed.
+- Gemma's argmax head exposes only the best token of each of 16 vocabulary slices. Consequences: the confidence value is an upper bound (normalised over 16 maxima), and token healing picks among 16 candidates. Floors recalibrated from a per-token trace of the 20 phrases to 0.30 / 0.30 / 0.20 (first token / word start / inside a word); with them «когда будет» yields no suggestion instead of «открыта новая торговая». The Qwen3 0.6B floors were 0.09 / 0.08 / 0.05 on a true softmax.
+- `ModelStore` installs `anemll/anemll-google-gemma-3-1b-it-ctx4096_0.3.5` at revision `a1b00f62…`: 19 files, 1,433,099,398 bytes, each checked for size and SHA-256 (hashes also matched the Hugging Face LFS object ids at download time). `ModelProbe --install .model-cache/gemma1b` passed and installed to `~/Library/Application Support/QuietType/Models/Gemma3-1B`.
+- `ModelProbe` on the installed model: five built-in prefixes, including one longer than a 64-token prefill batch (92 reused tokens), gave identical warm and cold-KV output; calls took 64–141 ms. `--try --loop` on five phrases ended every sentence without cycling. The same built-in probe also passed on Qwen3 0.6B after the refactor.
+- 17 Swift Testing tests pass (none exercise Core ML; model behaviour is covered only by ModelProbe).
+- First load of the new model took 80–106 s (one-time Neural Engine specialisation per install path), later loads about 1 s. The first call after load took about 210 ms.
+- **Not verified**: live typing in other applications with the new model, memory footprint, energy, and behaviour beyond 512 tokens of context. Gemma weights fall under Google's Gemma Terms of Use rather than Apache 2.0; see THIRD_PARTY_NOTICES.md.
+
+
+## 0.2.0: installer, style memory, compute fallback, updater (11 November 2026)
+
+Verified:
+- 22 unit tests pass, including style-memory recall, vocabulary completion, secret/number filtering, style card selection and version comparison.
+- `ModelProbe --memory <file> --try …`: with five sample phrases in front, completions follow the user's vocabulary ("давай завтра " → "по лендингу"; "Я ща " → "посмотрю, как у" instead of nonsense); KV reuse of the sample block confirmed (reused 67–74 tokens).
+- `ModelProbe --no-ane`: the same Gemma files load and generate on CPU + GPU (M5): first call 24.5 s, then 0.5–2 s.
+- DMG mounts, contains the app, the Applications link and the install notes; the signature verifies.
+
+Not verified:
+- The Neural Engine load failure itself was reported from an M1 Pro on macOS 27.0 and not reproduced here; the fallback was exercised only by skipping the Neural Engine on an M5.
+- Gatekeeper's first-launch prompt (Gatekeeper is disabled on the build machine).
+- Live learning from typing in other apps and the end-to-end self-update (needs a published newer release).

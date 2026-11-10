@@ -1,23 +1,19 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import QuietTypeCore
 
 @MainActor
 final class TypingService {
     private struct Field {
-        let element: AXUIElement
+        let element: AXUIElement?   // nil: the text comes from observed keystrokes
         let pid: pid_t
-        let selection: CFRange
+        let location: Int           // UTF-16 caret offset (or typed length)
         let prefix: String
-        let caret: CGRect
+        let caret: CGRect?          // nil: host gives no caret geometry, use the pill
         let container: CGRect
         let font: NSFont
         let color: NSColor
-
-        func matches(_ other: Field) -> Bool {
-            pid == other.pid && CFEqual(element, other.element) &&
-            selection.location == other.selection.location && selection.length == other.selection.length && prefix == other.prefix
-        }
     }
 
     private let state: AppState
@@ -35,7 +31,18 @@ final class TypingService {
     private var current: Field?
     private var suggestion = ""
     private var cache = CompletionCache()
+    /// The rest of a suggestion whose beginning was accepted or typed by hand.
     private var acceptedContinuation: (field: Field, inserted: String, remainder: String)?
+    /// Hosts that hide their text field from Accessibility are followed by keystrokes.
+    private var keystrokeMode = false
+    private var typed = TypedBuffer()
+    /// Web content often reports AX insertion as successful without performing it.
+    private var insertsByTyping = false
+    /// What the user typed in the current field since the last caret jump: the only text
+    /// the style memory learns from. Pasted and pre-existing text never gets here.
+    private var written = TypedBuffer()
+    private var frontBundle = ""
+    private var styleCard = ""
     private let syntheticEventTag: Int64 = 0x51545950
 
     init(state: AppState) { self.state = state }
@@ -95,58 +102,105 @@ final class TypingService {
         state.keyboardGranted = true
     }
 
+    /// Runs inside the event tap, which delays every keystroke on the system while it works.
+    /// It therefore only touches local state; Accessibility calls happen in later tasks.
     private func handle(type: CGEventType, event: CGEvent) -> Bool {
-        if type == .leftMouseDown || type == .rightMouseDown || type == .scrollWheel {
-            acceptedContinuation = nil
-            dismiss()
-            return false
-        }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
             dismiss()
             return false
         }
+        if type == .scrollWheel {
+            // The pill is not anchored to the caret, scrolling does not invalidate it.
+            if !keystrokeMode, current?.caret != nil { acceptedContinuation = nil; dismiss() }
+            return false
+        }
+        if type == .leftMouseDown || type == .rightMouseDown {
+            acceptedContinuation = nil
+            typed.apply(.reset)
+            commitWritten()
+            dismiss()
+            if keystrokeMode || observedField == nil {
+                // A click may move focus without any Accessibility notification.
+                pending = Task { [weak self] in
+                    guard (try? await Task.sleep(for: .milliseconds(150))) != nil else { return }
+                    self?.observeFocus()
+                }
+            }
+            return false
+        }
         guard type == .keyDown, event.getIntegerValueField(.eventSourceUserData) != syntheticEventTag else {
             return false
         }
-        let key = event.getIntegerValueField(.keyboardEventKeycode)
+        let key = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
         if key == 49, flags == [.maskControl, .maskAlternate] {
             schedule(manual: true)
             return false
         }
-        if key == 48, (flags.isEmpty || flags == .maskAlternate), !suggestion.isEmpty,
-           accept(all: flags == .maskAlternate) { return true }
-        if key == 53 {
-            let hadSuggestion = !suggestion.isEmpty
+        // A visible suggestion owns Tab unconditionally: nothing is re-read here, so a slow
+        // host (browsers) can neither time the tap out nor receive the key itself.
+        if key == 48, flags.isEmpty || flags == .maskAlternate, !suggestion.isEmpty, state.enabled,
+           let field = current, NSWorkspace.shared.frontmostApplication?.processIdentifier == field.pid {
+            accept(all: flags == .maskAlternate, field: field)
+            return true
+        }
+        if key == 53, !suggestion.isEmpty {
             acceptedContinuation = nil
             dismiss()
-            return hadSuggestion
+            return true
+        }
+        var length = 0
+        var units = [UniChar](repeating: 0, count: 8)
+        event.keyboardGetUnicodeString(maxStringLength: 8, actualStringLength: &length, unicodeString: &units)
+        let characters = String(utf16CodeUnits: units, count: length)
+        let shortcut = !flags.intersection([.maskCommand, .maskControl]).isEmpty
+        let typedKey = TypedBuffer.key(keyCode: key, command: flags.contains(.maskCommand), control: flags.contains(.maskControl),
+                                       option: flags.contains(.maskAlternate), characters: characters)
+        // Typing the suggested characters keeps the rest of the suggestion: no new inference.
+        if case .text(let string) = typedKey, let field = current,
+           suggestion.hasPrefix(string), suggestion.count > string.count {
+            acceptedContinuation = (field, string, String(suggestion.dropFirst(string.count)))
+        } else {
+            acceptedContinuation = nil
         }
         // Dismiss before the host processes a key, so Tab can never take an old suggestion.
-        acceptedContinuation = nil
         dismiss()
-        if state.enabled, state.modelReady, flags.intersection([.maskCommand, .maskControl]).isEmpty {
+        if typedKey == .reset || observedField == nil || IsSecureEventInputEnabled() { commitWritten() }
+        else if state.memoryEnabled { written.apply(typedKey) }
+        guard state.enabled, state.modelReady else { return false }
+        if keystrokeMode {
+            // Password prompts turn Secure Input on; never follow keys there.
+            typed.apply(IsSecureEventInputEnabled() ? .reset : typedKey)
+            if !typed.text.isEmpty { schedule(manual: false) }
+        } else if !shortcut {
             // Some custom editors omit AX value notifications. A single cancellable
             // follow-up per key reads the field after the host has handled the event.
             // AX notifications supersede this task when the editor does send them.
             pending = Task { [weak self] in
-                do {
-                    try await Task.sleep(for: .milliseconds(30))
-                    try Task.checkCancellation()
-                    guard let self else { return }
-                    if observedField == nil { observeFocus() }
-                    else { schedule(manual: false) }
-                } catch { return } // Only the cancellable sleep/check above can throw.
+                guard (try? await Task.sleep(for: .milliseconds(25))) != nil, let self else { return }
+                if observedField == nil { observeFocus() }
+                else { schedule(manual: false) }
             }
         }
         return false
     }
 
+    /// Hands the finished fragment to the style memory.
+    private func commitWritten() {
+        let text = written.text
+        written.apply(.reset)
+        guard state.memoryEnabled, text.count >= 8, !frontBundle.isEmpty else { return }
+        state.learn(text, app: frontBundle)
+        state.log("memory: learned \(text.count) chars")
+    }
+
     private func attachToFrontmost() {
         clearContext()
+        frontBundle = ""; styleCard = ""
         if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes) }
         observer = nil; observedRoot = nil; observedField = nil
+        keystrokeMode = false; insertsByTyping = false
         guard state.accessibilityGranted, let application = NSWorkspace.shared.frontmostApplication,
               application.processIdentifier != ProcessInfo.processInfo.processIdentifier,
               let bundleID = application.bundleIdentifier,
@@ -155,8 +209,17 @@ final class TypingService {
             return
         }
         state.activeApplication = application.localizedName ?? bundleID
+        frontBundle = bundleID
+        // Fixed while the app stays in front, so the model keeps its cache of it.
+        styleCard = state.memoryEnabled ? state.memory.styleCard(app: bundleID) : ""
         let root = AXUIElementCreateApplication(application.processIdentifier)
         AXUIElementSetMessagingTimeout(root, 0.08)
+        // Chromium and Electron build the web Accessibility tree only for assistive clients.
+        if AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanTrue) != .success,
+           ["chrome", "chromium", "brave", "edgemac", "vivaldi", "opera", "yandex", "thebrowser"]
+            .contains(where: bundleID.lowercased().contains) {
+            AXUIElementSetAttributeValue(root, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        }
         var created: AXObserver?
         let result = AXObserverCreate(application.processIdentifier, { _, _, notification, pointer in
             guard let pointer else { return }
@@ -175,19 +238,84 @@ final class TypingService {
     }
 
     private func observeFocus() {
-        clearContext()
+        dismiss()
+        acceptedContinuation = nil
+        cache.clear()
+        typed.apply(.reset)
+        commitWritten()
         if let observer, let field = observedField {
             for name in [kAXValueChangedNotification, kAXSelectedTextChangedNotification] {
                 AXObserverRemoveNotification(observer, field, name as CFString)
             }
         }
         observedField = nil
-        guard let observer, let target = focusedTarget() else { return }
+        keystrokeMode = false
+        insertsByTyping = false
+        guard let observer else { return } // No observer: excluded app or no permission.
+        guard let target = focusedTarget() else {
+            if state.enabled, let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+               KeystrokeFallback.applies(bundleID: bundle) {
+                keystrokeMode = true
+                state.log("keystroke mode on")
+                state.fieldStatus = "Приложение скрывает поле ввода: подсказка по набранному тексту"
+            }
+            return
+        }
         observedField = target.element
         for name in [kAXValueChangedNotification, kAXSelectedTextChangedNotification] {
             AXObserverAddNotification(observer, target.element, name as CFString, Unmanaged.passUnretained(self).toOpaque())
         }
+        // Telegram's AXSelectedText setter inserts the text twice; type there instead.
+        insertsByTyping = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "ru.keepcoder.Telegram"
+        var ancestor = target.element
+        for _ in 0..<(insertsByTyping ? 0 : 16) {
+            guard let parent = attribute(ancestor, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            ancestor = unsafeDowncast(parent, to: AXUIElement.self)
+            if attribute(ancestor, kAXRoleAttribute) as? String == "AXWebArea" { insertsByTyping = true; break }
+        }
         schedule(manual: false)
+    }
+
+    private func rect(_ element: AXUIElement, range: CFRange) -> CGRect? {
+        var range = range
+        guard let parameter = AXValueCreate(.cfRange, &range) else { return nil }
+        var bounds: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString,
+                                                        parameter, &bounds) == .success,
+              let bounds, CFGetTypeID(bounds) == AXValueGetTypeID() else { return nil }
+        var rect = CGRect.zero
+        guard AXValueGetValue(unsafeDowncast(bounds, to: AXValue.self), .cgRect, &rect),
+              rect.height > 0, rect.height < 400, rect.origin.x.isFinite, rect.origin.y.isFinite else { return nil }
+        return rect
+    }
+
+    private func frame(_ element: AXUIElement) -> CGRect? {
+        guard let positionValue = attribute(element, kAXPositionAttribute), CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              let sizeValue = attribute(element, kAXSizeAttribute), CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(unsafeDowncast(positionValue, to: AXValue.self), .cgPoint, &position),
+              AXValueGetValue(unsafeDowncast(sizeValue, to: AXValue.self), .cgSize, &size), size.width > 0, size.height > 0 else { return nil }
+        return CGRect(x: position.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - position.y - size.height,
+                      width: size.width, height: size.height)
+    }
+
+    /// Keystroke mode: the context is what was typed, the anchor is the focused window.
+    private func typedField() -> Field? {
+        guard state.enabled, !IsSecureEventInputEnabled(), let app = NSWorkspace.shared.frontmostApplication,
+              let bundle = app.bundleIdentifier, KeystrokeFallback.applies(bundleID: bundle) else { return nil }
+        let policy = state.policy
+        let context = CompletionText.stableContext(typed.text, location: typed.text.utf16.count,
+                                                   minimum: policy.contextCharacters, chunk: policy.contextCharacters / 3)
+        guard context.count >= 3, PrivacyGate.allowsContext(context) else { return nil }
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(root, 0.05)
+        var window = NSScreen.main?.visibleFrame ?? .zero
+        if let focused = attribute(root, kAXFocusedWindowAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID(),
+           let frame = frame(unsafeDowncast(focused, to: AXUIElement.self)) { window = frame }
+        state.fieldStatus = "Подсказка по набранному тексту · \(context.count) символов контекста"
+        return Field(element: nil, pid: app.processIdentifier, location: typed.text.utf16.count, prefix: context,
+                     caret: nil, container: window, font: .systemFont(ofSize: 13), color: .labelColor)
     }
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -211,7 +339,7 @@ final class TypingService {
         AXUIElementSetMessagingTimeout(field, 0.03)
         let role = attribute(field, kAXRoleAttribute) as? String
         let subrole = attribute(field, kAXSubroleAttribute) as? String
-        state.fieldStatus = "Проверка поля: \(role ?? "нет типа")"
+        state.fieldStatus = "Проверка поля: \(role ?? "нет типа") \(subrole ?? "")"
         guard TextFieldPolicy.shouldObserve(role: role, subrole: subrole,
                                           protected: (attribute(field, "AXProtectedContent") as? Bool) == true) else { return nil }
         state.activeApplication = app.localizedName ?? bundle
@@ -219,6 +347,7 @@ final class TypingService {
     }
 
     private func readField() -> Field? {
+        if keystrokeMode { return typedField() }
         guard let target = focusedTarget() else { return nil }
         let field = target.element
         guard let rawRange = attribute(field, kAXSelectedTextRangeAttribute),
@@ -237,6 +366,7 @@ final class TypingService {
                 var tail: CFTypeRef?
                 if AXUIElementCopyParameterizedAttributeValue(field, kAXStringForRangeParameterizedAttribute as CFString, value, &tail) == .success,
                    let text = tail as? String, !text.allSatisfy(\.isWhitespace) {
+                    state.log("text after caret: \(text.count) chars of \(count) total, caret at \(selection.location)")
                     state.fieldStatus = "Переместите курсор в конец текста для подсказки"
                     return nil
                 }
@@ -253,32 +383,45 @@ final class TypingService {
             guard let count = attribute(field, kAXNumberOfCharactersAttribute) as? Int, count <= 32_768,
                   let text = attribute(field, kAXValueAttribute) as? String,
                   let before = CompletionText.prefix(text, utf16Offset: selection.location) else { return nil }
-            prefix = String(before.suffix(state.policy.contextCharacters))
+            prefix = String(before.suffix(1024))
         }
-        let bounded = String(prefix.suffix(state.policy.contextCharacters))
+        let policy = state.policy
+        let bounded = CompletionText.stableContext(prefix, location: selection.location,
+                                                   minimum: policy.contextCharacters, chunk: policy.contextCharacters / 3)
         state.fieldStatus = "Проверка контекста и координат"
         guard bounded.count >= 3, PrivacyGate.allowsContext(bounded) else { return nil }
-        var caretRange = selection
-        guard let caretParameter = AXValueCreate(.cfRange, &caretRange) else { return nil }
-        var bounds: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(field, kAXBoundsForRangeParameterizedAttribute as CFString,
-                                                        caretParameter, &bounds) == .success,
-              let bounds, CFGetTypeID(bounds) == AXValueGetTypeID() else { return nil }
-        var caret = CGRect.zero
-        guard AXValueGetValue(unsafeDowncast(bounds, to: AXValue.self), .cgRect, &caret),
-              caret.height > 0, caret.origin.x.isFinite, caret.origin.y.isFinite else { return nil }
-        caret.origin.y = (NSScreen.screens.first?.frame.maxY ?? 0) - caret.maxY
-        var container = caret.insetBy(dx: -220, dy: -80)
-        if let positionValue = attribute(field, kAXPositionAttribute), CFGetTypeID(positionValue) == AXValueGetTypeID(),
-           let sizeValue = attribute(field, kAXSizeAttribute), CFGetTypeID(sizeValue) == AXValueGetTypeID() {
-            var position = CGPoint.zero
-            var size = CGSize.zero
-            if AXValueGetValue(unsafeDowncast(positionValue, to: AXValue.self), .cgPoint, &position),
-               AXValueGetValue(unsafeDowncast(sizeValue, to: AXValue.self), .cgSize, &size), size.width > 0 {
-                container = CGRect(x: position.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - position.y - size.height,
-                                   width: size.width, height: size.height)
+        let fieldFrame = frame(field)
+        // Many hosts (web views above all) return nothing for an empty range; the glyph
+        // before the caret gives the same position.
+        var caretRect = rect(field, range: CFRange(location: selection.location, length: 0))
+        if caretRect == nil, selection.location > 0, bounded.last?.isNewline == false,
+           let previous = rect(field, range: CFRange(location: selection.location - 1, length: 1)) {
+            caretRect = CGRect(x: previous.maxX, y: previous.minY, width: 0, height: previous.height)
+        }
+        // Chromium and WebKit editors answer only through text markers: the bounds of the
+        // collapsed selection are the caret itself.
+        if caretRect == nil, let markers = attribute(field, "AXSelectedTextMarkerRange") {
+            var bounds: CFTypeRef?
+            var marked = CGRect.zero
+            if AXUIElementCopyParameterizedAttributeValue(field, "AXBoundsForTextMarkerRange" as CFString, markers, &bounds) == .success,
+               let bounds, CFGetTypeID(bounds) == AXValueGetTypeID(),
+               AXValueGetValue(unsafeDowncast(bounds, to: AXValue.self), .cgRect, &marked),
+               marked.height > 0, marked.height < 400, marked.width < 4 {
+                caretRect = marked
             }
         }
+        guard var caret = caretRect else {
+            guard let fieldFrame else { return nil }
+            state.fieldStatus = "Поле без координат курсора: подсказка рядом с полем"
+            return Field(element: field, pid: target.pid, location: selection.location, prefix: bounded,
+                         caret: nil, container: fieldFrame, font: .systemFont(ofSize: 13), color: .labelColor)
+        }
+        caret.origin.y = (NSScreen.screens.first?.frame.maxY ?? 0) - caret.maxY
+        // Telegram reports text rectangles exactly one line above the glyphs.
+        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "ru.keepcoder.Telegram" {
+            caret.origin.y -= caret.height
+        }
+        var container = fieldFrame ?? caret.insetBy(dx: -220, dy: -80)
         // Use the host's actual text origin, including its text-container inset.
         var lineNumber: CFTypeRef?
         if AXUIElementCopyParameterizedAttributeValue(field, kAXLineForIndexParameterizedAttribute as CFString,
@@ -319,51 +462,82 @@ final class TypingService {
         }
         let style = HostTextStyle(attributes: attributes, caretHeight: caret.height)
         guard container.insetBy(dx: -2, dy: -2).contains(CGPoint(x: caret.midX, y: caret.midY)) else {
-            state.fieldStatus = "Курсор вне видимой области поля"
-            return nil
+            // Some hosts report caret rectangles in a wrong coordinate space. Their text is
+            // still good, so show the suggestion next to the field instead of dropping it.
+            state.log("caret \(caret.integral) outside field \((fieldFrame ?? container).integral)")
+            guard let fieldFrame else { return nil }
+            state.fieldStatus = "Координаты курсора вне поля: подсказка рядом с полем"
+            return Field(element: field, pid: target.pid, location: selection.location, prefix: bounded,
+                         caret: nil, container: fieldFrame, font: .systemFont(ofSize: 13), color: .labelColor)
         }
         state.fieldStatus = "Поле готово · \(Int(style.font.pointSize)) pt · \(bounded.count) символов контекста"
-        return Field(element: field, pid: target.pid, selection: selection, prefix: bounded,
+        return Field(element: field, pid: target.pid, location: selection.location, prefix: bounded,
                      caret: caret, container: container, font: style.font, color: style.color)
     }
 
-    private func schedule(manual: Bool) {
-        dismiss()
-        guard state.enabled, state.modelReady, state.policy.allowsAutomatic,
-              !state.manualOnly || manual, let field = readField() else { return }
-        current = field
-        let id = requestID
-        if let continuation = acceptedContinuation {
-            let expected = String((continuation.field.prefix + continuation.inserted).suffix(state.policy.contextCharacters))
-            if field.pid == continuation.field.pid,
-               CFEqual(field.element, continuation.field.element),
-               field.selection.location == continuation.field.selection.location + continuation.inserted.utf16.count,
-               field.prefix == expected {
-                acceptedContinuation = nil
-                cache.insert(continuation.remainder, for: field.prefix)
-                publish(continuation.remainder, field: field, id: id)
-                return
-            }
+    /// The remainder to show when `field` is exactly the old field plus the accepted text.
+    private func continuation(for field: Field) -> String? {
+        guard let pending = acceptedContinuation, field.pid == pending.field.pid,
+              field.location == pending.field.location + pending.inserted.utf16.count,
+              field.prefix.hasSuffix(String((pending.field.prefix + pending.inserted).suffix(48))) else { return nil }
+        switch (field.element, pending.field.element) {
+        case (nil, nil): return pending.remainder
+        case let (now?, before?): return CFEqual(now, before) ? pending.remainder : nil
+        default: return nil
         }
+    }
+
+    private func schedule(manual: Bool) {
+        // Hosts report one edit several times; a suggestion that still fits stays put.
+        if !manual, !suggestion.isEmpty, let shown = current, let field = readField(),
+           field.location == shown.location, field.prefix == shown.prefix { return }
+        dismiss()
+        guard state.enabled, state.modelReady, state.policy.allowsAutomatic else { return }
+        let id = requestID
+        if acceptedContinuation != nil, let field = readField(), let rest = continuation(for: field) {
+            acceptedContinuation = nil
+            cache.insert(rest, for: field.prefix)
+            publish(rest, field: field, id: id)
+            return
+        }
+        guard !state.manualOnly || manual else { return }
         let policy = state.policy
         pending = Task { [weak self] in
             guard let self else { return }
             do {
                 if !manual { try await Task.sleep(for: .milliseconds(policy.debounceMilliseconds)) }
                 try Task.checkCancellation()
-                guard let now = readField(), field.matches(now) else { return }
+                // One field read per request; any later key, click or AX change replaces
+                // `requestID`, which is what keeps a published suggestion from going stale.
+                guard requestID == id else { return }
+                guard let field = readField() else { state.log("no field: \(state.fieldStatus)"); return }
+                if let rest = continuation(for: field) {
+                    acceptedContinuation = nil
+                    publish(rest, field: field, id: id)
+                    return
+                }
                 if let cached = cache.value(for: field.prefix) {
                     publish(cached, field: field, id: id)
                     return
                 }
-                let result = try await state.engine.complete(prefix: field.prefix, maxTokens: policy.maxTokens, maxWords: policy.maxWords) { [weak self] partial in
+                // The user's own habit comes first; the model fills in where there is none.
+                if state.memoryEnabled, let own = state.memory.continuation(of: field.prefix, maxWords: policy.maxWords) {
+                    state.log("memory: \(own.count) chars")
+                    cache.insert(own, for: field.prefix)
+                    publish(own, field: field, id: id)
+                    return
+                }
+                current = field
+                let result = try await state.engine.complete(prefix: field.prefix, memory: state.memoryEnabled ? styleCard : "", maxTokens: policy.maxTokens, maxWords: policy.maxWords) { [weak self] partial in
                     Task { @MainActor in self?.publishPartial(partial, id: id) }
                 }
                 try Task.checkCancellation()
                 guard requestID == id else { return }
                 cache.insert(result.text, for: field.prefix)
                 state.record(result)
-                publish(result.text, field: field, id: id)
+                state.log("model: \(result.text.count) chars in \(Int(result.milliseconds)) ms, context \(field.prefix.count)")
+                if result.text.isEmpty { suggestion = ""; panel.hide() }
+                else { publish(result.text, field: field, id: id) }
             } catch is CancellationError {} catch {
                 if requestID == id { state.error = error.localizedDescription; dismiss() }
             }
@@ -376,47 +550,93 @@ final class TypingService {
     }
 
     private func publish(_ text: String, field: Field, id: UUID) {
-        guard requestID == id, state.enabled, let now = readField(), field.matches(now), !text.isEmpty else { return }
+        guard requestID == id, state.enabled, !text.isEmpty else { return }
         current = field
         suggestion = text
-        panel.show(text, caret: now.caret, container: now.container, font: now.font, color: now.color)
+        state.log("show \(field.caret == nil ? "pill" : "inline") \(text.count) chars, source \(field.element == nil ? "keys" : "ax")")
+        if let caret = field.caret {
+            panel.show(text, caret: caret, container: field.container, font: field.font, color: field.color)
+        } else {
+            panel.showPill(text, anchor: field.container, insideWindow: field.element == nil)
+        }
     }
 
-    private func accept(all: Bool) -> Bool {
-        guard state.enabled, state.modelReady, let current, let live = readField(), current.matches(live) else {
-            dismiss(); return false
-        }
+    private func accept(all: Bool, field: Field) {
+        state.log("tab accept, typing=\(insertsByTyping || field.element == nil)")
         let text = all ? suggestion : CompletionText.nextWord(suggestion)
-        guard !text.isEmpty else { return false }
+        guard !text.isEmpty else { return }
         let remainder = String(suggestion.dropFirst(text.count))
         dismiss()
-        acceptedContinuation = remainder.isEmpty ? nil : (live, text, remainder)
-        var settable = DarwinBoolean(false)
-        AXUIElementIsAttributeSettable(live.element, kAXSelectedTextAttribute as CFString, &settable)
-        if settable.boolValue,
-           AXUIElementSetAttributeValue(live.element, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
-            var range = CFRange(location: live.selection.location + text.utf16.count, length: 0)
-            if let value = AXValueCreate(.cfRange, &range) {
-                AXUIElementSetAttributeValue(live.element, kAXSelectedTextRangeAttribute as CFString, value)
-            }
-        } else {
-            // Unicode events preserve the clipboard and work with standard browser fields.
-            let characters = Array(text.utf16)
-            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { return false }
-            for event in [down, up] {
-                event.setIntegerValueField(.eventSourceUserData, value: syntheticEventTag)
-                event.keyboardSetUnicodeString(stringLength: characters.count, unicodeString: characters)
-                event.postToPid(live.pid)
-            }
-        }
+        acceptedContinuation = remainder.isEmpty ? nil : (field, text, remainder)
         state.acceptedCharacters += text.count
-        // Direct AX insertion is synchronous: preserve the rest for repeated Tab.
-        // Unicode fallback delivers a field-change notification after its events.
-        if let after = readField(), after.selection.location == live.selection.location + text.utf16.count {
-            schedule(manual: true)
+        // Insert after the tap callback has returned: Tab is already consumed.
+        Task { [weak self] in
+            guard let self else { return }
+            await insert(text, into: field)
+            if field.element == nil { typed.apply(.text(text)) }
+            if state.memoryEnabled, observedField != nil { written.apply(.text(text)) }
+            // A change notification may already have brought the remainder back.
+            if suggestion.isEmpty { schedule(manual: true) }
         }
-        return true
+    }
+
+    private func caretLocation(of element: AXUIElement) -> Int? {
+        var selection = CFRange()
+        guard let raw = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(raw) == AXValueGetTypeID(),
+              AXValueGetValue(unsafeDowncast(raw, to: AXValue.self), .cfRange, &selection) else { return nil }
+        return selection.location
+    }
+
+    /// Inserts through Accessibility when the host supports it, otherwise by typing.
+    private func insert(_ text: String, into field: Field) async {
+        if let element = field.element, !insertsByTyping {
+            var settable = DarwinBoolean(false)
+            AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
+            if settable.boolValue,
+               AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
+                // Some hosts (Telegram) apply the write a moment later. Typing as well
+                // would insert the word twice, so wait before concluding it was ignored.
+                var moved = caretLocation(of: element).map { $0 != field.location } ?? true
+                if !moved {
+                    try? await Task.sleep(for: .milliseconds(120))
+                    moved = caretLocation(of: element).map { $0 != field.location } ?? true
+                }
+                if moved {
+                    var range = CFRange(location: field.location + text.utf16.count, length: 0)
+                    if let value = AXValueCreate(.cfRange, &range) {
+                        AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
+                    }
+                    return
+                }
+                state.log("AX insert ignored, typing instead")
+            }
+        }
+        type(text, pid: field.pid)
+        // Typed events reach the host asynchronously; let it apply them first.
+        if field.element != nil { try? await Task.sleep(for: .milliseconds(60)) }
+    }
+
+    /// Unicode key events preserve the clipboard and work in web and custom fields.
+    /// Hosts read only a short string per event, so send small whole-character chunks.
+    private func type(_ text: String, pid: pid_t) {
+        var chunk: [UniChar] = []
+        func flush() {
+            guard !chunk.isEmpty, let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { return }
+            for event in [down, up] {
+                event.flags = [] // Option may still be held from Option-Tab.
+                event.setIntegerValueField(.eventSourceUserData, value: syntheticEventTag)
+                event.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                event.postToPid(pid)
+            }
+            chunk.removeAll(keepingCapacity: true)
+        }
+        for character in text {
+            let units = Array(String(character).utf16)
+            if chunk.count + units.count > 16 { flush() }
+            chunk.append(contentsOf: units)
+        }
+        flush()
     }
 
     private func dismiss() {
@@ -429,6 +649,8 @@ final class TypingService {
     private func clearContext() {
         dismiss()
         acceptedContinuation = nil
+        typed.apply(.reset)
+        commitWritten()
         cache.clear()
         Task { await state.engine.resetContext() }
     }

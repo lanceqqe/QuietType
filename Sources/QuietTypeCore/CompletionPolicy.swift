@@ -39,6 +39,35 @@ public enum CompletionText {
         return String(text[..<index])
     }
 
+    /// Splits off the word under the caret (with its leading space) so the model can
+    /// re-predict it: "Давай обсуд" → ("Давай", " обсуд"); "Давай " → ("Давай", " ").
+    public static func healingSplit(_ prefix: String) -> (stable: String, target: String)? {
+        guard let space = prefix.lastIndex(where: \.isWhitespace), prefix[space] == " " else { return nil }
+        let stable = prefix[..<space]
+        let target = prefix[space...]
+        guard target.count <= 24, let last = stable.last, !last.isWhitespace,
+              stable.contains(where: \.isLetter) else { return nil }
+        return (String(stable), String(target))
+    }
+
+    /// Context window whose start moves in whole `chunk` steps, so consecutive keystrokes
+    /// share a prefix and the model's KV cache survives. `text` ends at `location` (UTF-16).
+    public static func stableContext(_ text: String, location: Int, minimum: Int, chunk: Int) -> String {
+        let length = text.utf16.count
+        let step = max(1, chunk)
+        let snapped = location > minimum ? ((location - minimum + step - 1) / step) * step : 0
+        let drop = snapped - (location - length)
+        guard drop > 0, drop < length else { return text }
+        var index = String.Index(utf16Offset: drop, in: text)
+        while index < text.endIndex, index.samePosition(in: text.unicodeScalars) == nil {
+            index = text.utf16.index(after: index)
+        }
+        var cut = text[index...]
+        // Do not open the context in the middle of a word.
+        if let space = cut.prefix(48).firstIndex(where: \.isWhitespace) { cut = cut[cut.index(after: space)...] }
+        return String(cut)
+    }
+
     public static func clean(_ text: String) -> String {
         let firstLine = String(text.prefix(while: { !$0.isNewline }))
         guard !firstLine.contains("<|"), !firstLine.contains("<think>"),
@@ -78,10 +107,12 @@ public struct EnergyPolicy: Sendable {
 
     public init(mode: EnergyMode, lowPower: Bool, thermal: ThermalLevel) {
         let constrained = lowPower || mode == .economy || thermal == .serious
-        debounceMilliseconds = constrained ? 700 : (mode == .responsive ? 220 : 400)
+        // Inference is cancellable and takes ~15 ms per token, so the pause only has to
+        // absorb fast typing bursts; typed-through suggestions never wait for it.
+        debounceMilliseconds = constrained ? 400 : (mode == .responsive ? 50 : 110)
         maxTokens = constrained ? 8 : 16
         maxWords = constrained ? 2 : 3
-        contextCharacters = constrained ? 160 : 320
+        contextCharacters = constrained ? 300 : 900
         allowsAutomatic = thermal != .critical
     }
 }
@@ -105,6 +136,47 @@ public enum PrivacyGate {
     }
 }
 
+/// Apps whose message field is invisible to Accessibility. There the text typed since the
+/// last click or send is tracked from key events, in memory only.
+public enum KeystrokeFallback {
+    public static let bundleIDs: [String] = []
+    public static func applies(bundleID: String) -> Bool { bundleIDs.contains(bundleID) }
+}
+
+/// Text typed since the caret position was last unknown. Anything that may move the caret
+/// or change text behind our back resets it, so it never guesses.
+public struct TypedBuffer: Sendable {
+    public enum Key: Equatable, Sendable { case text(String), backspace, deleteWord, reset }
+    public private(set) var text = ""
+    public init() {}
+
+    public static func key(keyCode: Int, command: Bool, control: Bool, option: Bool, characters: String) -> Key {
+        if command || control { return .reset }
+        if keyCode == 51 { return option ? .deleteWord : .backspace }
+        // Return, Tab, Enter, Escape, forward delete, Home/End/Page keys, arrows.
+        if [36, 48, 76, 53, 117, 115, 119, 116, 121, 123, 124, 125, 126].contains(keyCode) { return .reset }
+        let printable = !characters.isEmpty && characters.unicodeScalars.allSatisfy {
+            $0.value >= 0x20 && $0.value != 0x7F && !(0xF700...0xF8FF).contains($0.value)
+        }
+        return printable ? .text(characters) : .reset
+    }
+
+    public mutating func apply(_ key: Key) {
+        switch key {
+        case .text(let string):
+            text += string
+            if text.count > 4_000 { text.removeFirst(text.count - 3_000) }
+        case .backspace:
+            if !text.isEmpty { text.removeLast() }
+        case .deleteWord:
+            while let last = text.last, last.isWhitespace { text.removeLast() }
+            while let last = text.last, !last.isWhitespace { text.removeLast() }
+        case .reset:
+            text = ""
+        }
+    }
+}
+
 /// Small, ephemeral cache; callers clear it on focus changes and pause.
 public struct CompletionCache {
     private var entries: [(String, String)] = []
@@ -117,4 +189,20 @@ public struct CompletionCache {
         if entries.count > capacity { entries.removeFirst() }
     }
     public mutating func clear() { entries.removeAll(keepingCapacity: false) }
+}
+
+public enum AppVersion {
+    /// Numeric comparison of dotted versions: "0.10.0" is newer than "0.9".
+    public static func isNewer(_ candidate: String, than current: String) -> Bool {
+        func parts(_ version: String) -> [Int]? {
+            let numbers = version.split(separator: ".").map { Int($0) }
+            return numbers.isEmpty || numbers.contains(nil) ? nil : numbers.compactMap { $0 }
+        }
+        guard let new = parts(candidate), let old = parts(current) else { return false }
+        for index in 0..<max(new.count, old.count) {
+            let (a, b) = (index < new.count ? new[index] : 0, index < old.count ? old[index] : 0)
+            if a != b { return a > b }
+        }
+        return false
+    }
 }

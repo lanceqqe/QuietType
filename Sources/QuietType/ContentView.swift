@@ -3,7 +3,7 @@ import SwiftUI
 import QuietTypeCore
 
 private enum Pane: String, CaseIterable, Identifiable {
-    case overview = "Обзор", writing = "Проверка текста", model = "Модель", energy = "Энергия", applications = "Приложения"
+    case overview = "Обзор", writing = "Проверка текста", model = "Модель", energy = "Энергия", memory = "Почерк", applications = "Приложения"
     var id: Self { self }
     var symbol: String {
         switch self {
@@ -11,6 +11,7 @@ private enum Pane: String, CaseIterable, Identifiable {
         case .writing: "square.and.pencil"
         case .model: "cpu"
         case .energy: "leaf"
+        case .memory: "signature"
         case .applications: "app.badge.checkmark"
         }
     }
@@ -46,6 +47,7 @@ struct ContentView: View {
                     case .writing: writing
                     case .model: model
                     case .energy: energy
+                    case .memory: memory
                     case .applications: applications
                     }
                 }
@@ -85,6 +87,7 @@ struct ContentView: View {
         case .writing: "Попробуйте локальную модель перед работой в других приложениях."
         case .model: "Собственная языковая модель. Apple Intelligence не требуется."
         case .energy: "Меньше вычислений во время набора. Никакой генерации в простое."
+        case .memory: "Подсказки вашими словами: QuietType запоминает, как вы пишете."
         case .applications: "Вы решаете, где появляются подсказки."
         }
     }
@@ -93,7 +96,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 24) {
             if !state.modelReady || !state.accessibilityGranted || !state.keyboardGranted {
                 VStack(alignment: .leading, spacing: 0) {
-                    setupRow("Локальная модель", detail: state.modelReady ? "Qwen3 · готова к работе" : (state.loading ? "Модель установлена, загружаем в память…" : "Один раз скачайте около 763 МиБ"), done: state.modelReady) {
+                    setupRow("Локальная модель", detail: state.modelReady ? "Gemma 3 · готова к работе" : (state.loading ? "Модель установлена, загружаем в память…" : "Один раз скачайте около \(ByteCountFormatter.string(fromByteCount: ModelAssets.downloadBytes, countStyle: .file))"), done: state.modelReady) {
                         Button(state.loading ? "Загрузка…" : (state.installing ? "Установка…" : "Настроить")) { selection = .model }
                     }
                     Divider()
@@ -112,7 +115,7 @@ struct ContentView: View {
                 }
                 VStack(alignment: .leading, spacing: 7) {
                     Label("Текст остаётся вашим", systemImage: "lock").font(.subheadline.weight(.medium))
-                    Text("Без облачных запросов и сохранения написанного на диск.").font(.callout).foregroundStyle(.secondary)
+                    Text(state.memoryEnabled ? "Без облачных запросов. Память почерка хранится только на этом Mac." : "Без облачных запросов и сохранения написанного на диск.").font(.callout).foregroundStyle(.secondary)
                 }
             }
         }
@@ -168,7 +171,7 @@ struct ContentView: View {
                 if let latency = state.latency {
                     Text("\(Int(latency)) мс · кэш: \(state.reusedTokens) токенов").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("Qwen3 0.6B · Core ML · локально").font(.caption).foregroundStyle(.secondary)
+                    Text("Gemma 3 1B · Core ML · локально").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if !state.playgroundSuggestion.isEmpty {
@@ -190,14 +193,14 @@ struct ContentView: View {
                     HStack(spacing: 14) {
                         Image(systemName: "cpu").font(.system(size: 30, weight: .light)).foregroundStyle(.teal)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Qwen3 · 0.6B").font(.title2.weight(.semibold))
-                            Text("ANEMLL · 6-битные веса · контекст 512 токенов").foregroundStyle(.secondary).font(.callout)
+                            Text(ModelAssets.displayName).font(.title2.weight(.semibold))
+                            Text("ANEMLL · 6-битные веса · используется до 512 токенов контекста").foregroundStyle(.secondary).font(.callout)
                         }
                         Spacer()
                     }
                     Divider()
                     LabeledContent("Языки", value: "Русский и английский")
-                    LabeledContent("Вычисления", value: "CPU + Neural Engine")
+                    LabeledContent("Вычисления", value: state.computeUnits.isEmpty ? "CPU + Neural Engine" : state.computeUnits)
                     LabeledContent("Размер загрузки", value: ByteCountFormatter.string(fromByteCount: ModelAssets.downloadBytes, countStyle: .file))
                     LabeledContent("Apple Intelligence", value: "Не требуется")
                     if state.installing {
@@ -226,8 +229,8 @@ struct ContentView: View {
                 }.padding(16)
             }
             Text("Модель компактная: короткие подсказки появляются быстро, но иногда бывают неточными. Продолжайте печатать, если вариант не подходит.").foregroundStyle(.secondary)
-            Text("Core ML сам распределяет операции между CPU и Neural Engine. GPU исключён конфигурацией; доля работы на ANE и расход энергии требуют отдельного профилирования.").font(.callout).foregroundStyle(.secondary)
-            Link("Модель и лицензия Apache 2.0 ↗", destination: URL(string: "https://huggingface.co/" + ModelAssets.repository)!)
+            Text("Модель работает на CPU и Neural Engine. Если Core ML на этом Mac не загружает её для Neural Engine, QuietType переходит на GPU или CPU: подсказки появляются медленнее.").font(.callout).foregroundStyle(.secondary)
+            Link("Модель и условия использования Gemma ↗", destination: URL(string: "https://huggingface.co/" + ModelAssets.repository)!)
         }
     }
 
@@ -255,6 +258,30 @@ struct ContentView: View {
                 LabeledContent("Принято символов", value: "\(state.acceptedCharacters)")
             }
         }.formStyle(.grouped).scrollDisabled(true).frame(minHeight: 480)
+    }
+
+    private var memory: some View {
+        Form {
+            Section {
+                Toggle("Запоминать мой почерк", isOn: $state.memoryEnabled)
+                Text("QuietType сохраняет то, что вы набираете в полях с подсказками: частые слова, привычные продолжения и последние фразы. По ним он сначала предлагает ваши собственные обороты, а модель читает ваши фразы как образец стиля.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Section("Сейчас в памяти") {
+                LabeledContent("Слов в словаре", value: "\(state.memory.words.count)")
+                LabeledContent("Привычных связок", value: "\(state.memory.follow.count)")
+                LabeledContent("Фраз-образцов", value: "\(state.memory.samples.count)")
+                HStack {
+                    Button("Показать файл") { NSWorkspace.shared.activateFileViewerSelecting([AppState.memoryURL]) }
+                        .disabled(state.memory.isEmpty)
+                    Button("Забыть всё", role: .destructive) { state.forgetMemory() }.disabled(state.memory.isEmpty)
+                }
+            }
+            Section {
+                Text("Память лежит в одном файле на этом Mac и никуда не отправляется. Вставленный текст, пароли, числа, ссылки и адреса не запоминаются; исключённые приложения и парольные поля не читаются.")
+                Text("Привычка появляется после нескольких повторов: обычно нужно пару дней обычной переписки.")
+            }.foregroundStyle(.secondary)
+        }.formStyle(.grouped).scrollDisabled(true).frame(minHeight: 420)
     }
 
     private var applications: some View {

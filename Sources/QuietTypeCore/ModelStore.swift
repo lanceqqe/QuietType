@@ -2,33 +2,39 @@ import CryptoKit
 import Foundation
 
 public enum ModelAssets {
-    public static let repository = "anemll/anemll-Qwen3-0.6B-ctx512_0.3.0"
-    public static let revision = "8b6eab61588f28e967bfe296379f15e1431166d4"
+    /// ANEMLL conversion of Gemma 3 1B (instruction-tuned), 6-bit FFN and LM head, argmax head.
+    public static let repository = "anemll/anemll-google-gemma-3-1b-it-ctx4096_0.3.5"
+    public static let revision = "a1b00f628f348c8ff55c9fe088e5db97535fd567"
+    public static let displayName = "Gemma 3 · 1B"
     public static let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("QuietType/Models/Qwen3-0.6B")
+        .appendingPathComponent("QuietType/Models/Gemma3-1B")
+    /// Calibrated on this model; another model needs its own floors (see docs/VALIDATION.md).
+    public static let profile = DecodingProfile(firstFloor: 0.3, wordFloor: 0.3, innerFloor: 0.2)
     public struct Asset: Sendable {
         public let path: String
         public let size: Int64
         public let sha256: String
     }
     public static let files: [Asset] = [
-        Asset(path: "qwen_FFN_PF_lut6_chunk_01of01.mlmodelc/analytics/coremldata.bin", size: 243, sha256: "7b7c483d615cb87d043a593379008d88fa63045f2c72b5b5d613a76b64d44946"),
-        Asset(path: "qwen_FFN_PF_lut6_chunk_01of01.mlmodelc/coremldata.bin", size: 982, sha256: "45fb72a3e2f9740586c89f894407c3546920d7f37ffeef2ec49683f40a7437b6"),
-        Asset(path: "qwen_FFN_PF_lut6_chunk_01of01.mlmodelc/metadata.json", size: 10264, sha256: "61b7de21166fc406bb3c575f6c243d5e66bf24438396d216379a7db5a0e577a8"),
-        Asset(path: "qwen_FFN_PF_lut6_chunk_01of01.mlmodelc/model.mil", size: 2010948, sha256: "c0c80e30e883c65722d55c36b341e2a6356bccedc36b513586ca2e3e2279a234"),
-        Asset(path: "qwen_FFN_PF_lut6_chunk_01of01.mlmodelc/weights/weight.bin", size: 355892992, sha256: "10580536ae3e0846a5316fdda40ec92d4d9feb65c7599110203ba910da2963d6"),
-        Asset(path: "qwen_embeddings.mlmodelc/analytics/coremldata.bin", size: 243, sha256: "d196be300bb824f90c84ef6bfe4f0a1beb6b5286bf20aef9c5f5f0f5939912c1"),
-        Asset(path: "qwen_embeddings.mlmodelc/coremldata.bin", size: 500, sha256: "a3466a99c47ce9f51bb02899445bfcbc8091d9bc0396c9130b5af0da7a7d14fb"),
-        Asset(path: "qwen_embeddings.mlmodelc/metadata.json", size: 1846, sha256: "8beaf21e1d7f10cb6e4900a100cc1645498febb1c2dc9aa2f3e2d1ee72332882"),
-        Asset(path: "qwen_embeddings.mlmodelc/model.mil", size: 1509, sha256: "6cee82de47669b5a1ced9d1fbace2210226af4d98f9c2df1e55d8ff32cb9b7b8"),
-        Asset(path: "qwen_embeddings.mlmodelc/weights/weight.bin", size: 311165056, sha256: "27934f1e8c1d2ce39d0f7c15d7117297794a24e5fd30f42f472d5f123834f532"),
-        Asset(path: "qwen_lm_head_lut6.mlmodelc/analytics/coremldata.bin", size: 243, sha256: "9e414bc0050985c1d047c64a2c40f68a1f6b4200b26106e06c6499d9dfd82c6b"),
-        Asset(path: "qwen_lm_head_lut6.mlmodelc/coremldata.bin", size: 897, sha256: "5418b075886c44c4f26d73a56700412fc248a8947d2679ce9b3ecf866ec8757b"),
-        Asset(path: "qwen_lm_head_lut6.mlmodelc/metadata.json", size: 6553, sha256: "86e507aa54c1cbccf1859926e43816d0ede9bbb08c38fa999f9df5e929c952c0"),
-        Asset(path: "qwen_lm_head_lut6.mlmodelc/model.mil", size: 30442, sha256: "5321a3da7875c7d60696ee1be1b13cfde7875e7bd5a05f24c735e718e47cbe07"),
-        Asset(path: "qwen_lm_head_lut6.mlmodelc/weights/weight.bin", size: 119119936, sha256: "67c24722deb60c3cba93270807f7404f8022de9ea1010b5686787bed4325f5c4"),
-        Asset(path: "tokenizer.json", size: 11422654, sha256: "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"),
-        Asset(path: "tokenizer_config.json", size: 8311, sha256: "5fdfe1416aaa323832d52c5bd8624a6e9bba3e9acc6ca8104f017abc775e2368"),
+        Asset(path: "config.json", size: 66, sha256: "57e37d62b88fe19bf8edfcc64189adeabd412b05ae6ce8c8f605bc36f1e6c677"),
+        Asset(path: "gemma3_FFN_PF_lut6_chunk_01of01.mlmodelc/analytics/coremldata.bin", size: 243, sha256: "5428848963a0f646e91d7e7f14334b6b7fe57eab46c32e7af1aeb43121536a0e"),
+        Asset(path: "gemma3_FFN_PF_lut6_chunk_01of01.mlmodelc/coremldata.bin", size: 1655, sha256: "ebf9f991115223c6521704e80eb9b03690d0dae486f8727f199bc4eabe097482"),
+        Asset(path: "gemma3_FFN_PF_lut6_chunk_01of01.mlmodelc/metadata.json", size: 18245, sha256: "8fa3fc9eae0c6c6c53559fa04efceb4a1d1492aeac45245c2938f64acd9fccb8"),
+        Asset(path: "gemma3_FFN_PF_lut6_chunk_01of01.mlmodelc/model.mil", size: 4509841, sha256: "822060a955a3d25733e80d748cd9bacf19e0e17d088d16151d466eec601ae90c"),
+        Asset(path: "gemma3_FFN_PF_lut6_chunk_01of01.mlmodelc/weights/weight.bin", size: 555097216, sha256: "faddf2fb58eb95da2b2160b560968a448bb5aec5e84e706012d0332cda25eb6a"),
+        Asset(path: "gemma3_embeddings_lut8.mlmodelc/analytics/coremldata.bin", size: 243, sha256: "7478f61e509dffd5dc8d9e01806296e2e05e45c8c88cf3ce84b872375a007036"),
+        Asset(path: "gemma3_embeddings_lut8.mlmodelc/coremldata.bin", size: 587, sha256: "1c69b647bec6f40ae75d785fc4f34cd72c24005fbadf40a89c835f71984dbe54"),
+        Asset(path: "gemma3_embeddings_lut8.mlmodelc/metadata.json", size: 2054, sha256: "4478777a70eb5050bf17d27d74854b8d1fb3eac225a656d88a55244d345afc41"),
+        Asset(path: "gemma3_embeddings_lut8.mlmodelc/model.mil", size: 2315, sha256: "910d986c8ab72c4bebf15d6df770e7958c395b0ea3c1a578e14598c46631bc5b"),
+        Asset(path: "gemma3_embeddings_lut8.mlmodelc/weights/weight.bin", size: 603979904, sha256: "573ae2fd94e5b742800087ebc6d11c6531f0c3955a911e71d7844433a60fcaa5"),
+        Asset(path: "gemma3_lm_head_lut6.mlmodelc/analytics/coremldata.bin", size: 243, sha256: "476e22675a5e6eb52a2a560ea66a0f36cf0e367d8af3fee7000feacb6e3739e2"),
+        Asset(path: "gemma3_lm_head_lut6.mlmodelc/coremldata.bin", size: 600, sha256: "1227384eea5776e75f3f454bea85dd2877aae7e3c3865435478729e6da3759da"),
+        Asset(path: "gemma3_lm_head_lut6.mlmodelc/metadata.json", size: 2457, sha256: "5f8788a6cd7da7d4f30a23f82917384f6a26caa80b0ee42e25e19796baf90956"),
+        Asset(path: "gemma3_lm_head_lut6.mlmodelc/model.mil", size: 56788, sha256: "774fd3191f0b79c5f9a25410602f5b53a0b0ed46438cae39c5ee2005a3607c3d"),
+        Asset(path: "gemma3_lm_head_lut6.mlmodelc/weights/weight.bin", size: 234883136, sha256: "5e5141ce851f2d8f53b241e7aac9e10655769c3a0b1ffa30940cba7aba887d6a"),
+        Asset(path: "meta.yaml", size: 2238, sha256: "377114b49a7213f6212707347ea05ebdb07fc61b5ea6f812d085c2433430f535"),
+        Asset(path: "tokenizer.json", size: 33384568, sha256: "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795"),
+        Asset(path: "tokenizer_config.json", size: 1156999, sha256: "bfe25c2735e395407beb78456ea9a6984a1f00d8c16fa04a8b75f2a614cf53e1"),
     ]
     public static var downloadBytes: Int64 { files.reduce(0) { $0 + $1.size } }
     public static var isInstalled: Bool {

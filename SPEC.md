@@ -4,7 +4,7 @@
 Build an installable native macOS autocomplete app for Russian and English, independent of Apple Intelligence. Local neural inference with Core ML CPU + Neural Engine configuration. Do not imitate Cotypist branding or promise compatibility with every text field.
 
 ## Modules and order
-1. `inference`: validate a downloadable Qwen Core ML model, tokenizer, cancellation, bounded generation.
+1. `inference`: validate a downloadable Core ML model (ANEMLL layout), tokenizer, cancellation, bounded generation.
 2. `completion`: context truncation, partial acceptance, cache, debounce, battery/thermal policies.
 3. `accessibility`: observe focused fields and changes, caret panel, Tab acceptance, reject stale contexts, exclude secure fields and sensitive apps.
 4. `app`: menu bar, Russian setup/settings, model download, playground, real session metrics.
@@ -27,7 +27,9 @@ try Task.checkCancellation()
 - Compiles and packages as an arm64 .app without external Python runtime.
 - Real local Russian and English generation; missing models produce actionable setup, never fake output.
 - No idle polling for text; debounce changes and keep at most one inference active.
-- Tab inserts one word, Option-Tab inserts the suggestion; Escape dismisses. Insert only after revalidating focus, text and selection.
+- Tab inserts one word, Option-Tab inserts the suggestion; Escape dismisses. A visible suggestion always consumes Tab; the event-tap callback makes no Accessibility calls. Every key, click, focus or text change invalidates the suggestion; insertion checks the frontmost process.
+- Hosts that hide their text field from Accessibility (allowlist, currently empty) are followed by an in-memory keystroke buffer and a pill; hosts without caret geometry get the pill next to the field.
+- Decoding re-predicts the word under the caret, blocks repeated token n-grams and cuts at low confidence; an empty suggestion is a valid result.
 - Suggestions are dim inline ghost text, with the host font when available, no bubble, border or badge. Preserve the remainder after word acceptance.
 - Default completion is at most three words; constrained energy modes use at most two. Stop inference at the completed word boundary instead of producing a long continuation.
 - Observe editable fields on focus even when empty; only generation waits for three input characters. Custom editors without AX notifications receive a single cancellable post-key follow-up, never idle polling.

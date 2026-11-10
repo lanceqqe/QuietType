@@ -13,6 +13,7 @@ final class AppState {
         }
     }
     var modelReady = false
+    var computeUnits = ""
     var loading = false
     var installing = false
     var installationProgress = 0.0
@@ -21,7 +22,19 @@ final class AppState {
     var accessibilityGranted = AXIsProcessTrusted()
     var keyboardGranted = false
     var activeApplication = "Нет текстового поля"
-    var fieldStatus = "Ожидание текстового поля"
+    var fieldStatus = "Ожидание текстового поля" {
+        didSet { if fieldStatus != oldValue { log(fieldStatus) } }
+    }
+    /// Diagnostic trace of pipeline stages: app name, stage, lengths. Never typed text.
+    @ObservationIgnored private let logHandle: FileHandle? = {
+        let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/QuietType.log")
+        FileManager.default.createFile(atPath: url.path, contents: nil) // truncated on every launch
+        return try? FileHandle(forWritingTo: url)
+    }()
+    func log(_ message: String) {
+        let time = Date().formatted(.dateTime.hour().minute().second().secondFraction(.fractional(3)))
+        logHandle?.write(Data("\(time) [\(activeApplication)] \(message)\n".utf8))
+    }
     var latency: Double?
     var generatedCount = 0
     var acceptedCharacters = 0
@@ -45,7 +58,37 @@ final class AppState {
         didSet { UserDefaults.standard.set(excludedApps, forKey: "excludedApps"); onPause?() }
     }
 
+    /// Personal writing habits; see StyleMemory. Off until the user turns it on.
+    var memoryEnabled: Bool {
+        didSet { UserDefaults.standard.set(memoryEnabled, forKey: "styleMemory"); onPause?() }
+    }
+    private(set) var memory = StyleMemory()
+    nonisolated static let memoryURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("QuietType/Memory/style.json")
+
+    func learn(_ text: String, app: String) {
+        guard memoryEnabled else { return }
+        memory.learn(text, app: app)
+        let snapshot = memory
+        Task.detached(priority: .utility) {
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            let fm = FileManager.default
+            try? fm.createDirectory(at: Self.memoryURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: Self.memoryURL, options: .atomic)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Self.memoryURL.path)
+        }
+    }
+
+    func forgetMemory() {
+        memory = StyleMemory()
+        try? FileManager.default.removeItem(at: Self.memoryURL)
+        onPause?()
+    }
+
     init() {
+        memoryEnabled = UserDefaults.standard.bool(forKey: "styleMemory")
+        if let data = try? Data(contentsOf: Self.memoryURL),
+           let saved = try? JSONDecoder().decode(StyleMemory.self, from: data) { memory = saved }
         energyMode = EnergyMode(rawValue: UserDefaults.standard.string(forKey: "energyMode") ?? "") ?? .automatic
         manualOnly = UserDefaults.standard.bool(forKey: "manualOnly")
         excludedApps = UserDefaults.standard.string(forKey: "excludedApps") ?? ""
@@ -88,6 +131,12 @@ final class AppState {
             do {
                 try await engine.load(from: ModelAssets.directory)
                 try Task.checkCancellation()
+                computeUnits = await engine.computeUnits
+                // The first call compiles kernels (tens of seconds on the GPU fallback);
+                // pay for it now instead of on the user's first suggestion.
+                _ = try? await engine.complete(prefix: "Привет, как", maxTokens: 2)
+                await engine.resetContext()
+                log("model loaded on \(computeUnits)")
                 modelReady = true
             } catch is CancellationError {} catch {
                 self.error = "Не удалось загрузить модель: \(error.localizedDescription)"

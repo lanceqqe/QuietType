@@ -4,12 +4,14 @@ QuietType is an independent implementation inspired by the workflow described at
 
 ## Model
 
-- Qwen3 0.6B by the Qwen team, Apache License 2.0: https://huggingface.co/Qwen/Qwen3-0.6B/blob/main/LICENSE
-- Core ML conversion: ANEMLL, https://huggingface.co/anemll/anemll-Qwen3-0.6B-ctx512_0.3.0
-- Pinned revision: `8b6eab61588f28e967bfe296379f15e1431166d4`.
+- Gemma 3 1B (instruction-tuned) by Google, distributed under the Gemma Terms of Use: https://ai.google.dev/gemma/terms. These are not an open-source licence; they carry use restrictions (Prohibited Use Policy) that pass on to anyone who redistributes the weights.
+- Core ML conversion: ANEMLL, https://huggingface.co/anemll/anemll-google-gemma-3-1b-it-ctx4096_0.3.5 (the repository card is tagged MIT; that covers the conversion, not Google's weights).
+- Pinned revision: `a1b00f628f348c8ff55c9fe088e5db97535fd567`.
 - ANEMLL conversion project: MIT, https://github.com/Anemll/Anemll/blob/main/LICENSE.
 
-Model files are downloaded separately. SHA-256 values in ModelStore.swift identify the tested artifacts. The metadata in this early ANEMLL conversion does not provide a reproducible base-versus-instruct provenance; do not claim it is the same model used by Cotypist or an optimized autocomplete fine-tune.
+Model files are downloaded separately by each user from Hugging Face; QuietType does not bundle them. SHA-256 values in ModelStore.swift identify the tested artifacts. Do not claim it is the same model used by Cotypist or an autocomplete fine-tune: it is a chat model driven as a plain text continuer.
+
+Earlier builds used Qwen3 0.6B (Apache 2.0, https://huggingface.co/anemll/anemll-Qwen3-0.6B-ctx512_0.3.0); it is no longer downloaded.
 
 ## Swift packages
 

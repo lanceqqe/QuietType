@@ -35,6 +35,45 @@ final class SuggestionPanel {
         panel.orderFrontRegardless()
     }
 
+    /// Fallback for hosts that expose no caret geometry: a compact label near the field
+    /// (or above the bottom edge of the window when even the field is unknown).
+    func showPill(_ suggestion: String, anchor: CGRect, insideWindow: Bool) {
+        let text = suggestion.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty,
+              let screen = NSScreen.screens.first(where: { $0.frame.intersects(anchor) }) ?? NSScreen.main else {
+            hide(); return
+        }
+        let label = NSTextField(labelWithAttributedString: {
+            let string = NSMutableAttributedString(string: "⇥  ", attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor])
+            string.append(NSAttributedString(string: text, attributes: [
+                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor]))
+            return string
+        }())
+        label.lineBreakMode = .byTruncatingTail
+        let fitting = label.fittingSize
+        let size = CGSize(width: min(460, ceil(fitting.width) + 22), height: ceil(fitting.height) + 10)
+        let background = NSVisualEffectView(frame: CGRect(origin: .zero, size: size))
+        background.material = .hudWindow
+        background.state = .active
+        background.wantsLayer = true
+        background.layer?.cornerRadius = 8
+        background.layer?.masksToBounds = true
+        background.setAccessibilityElement(false)
+        label.frame = CGRect(x: 11, y: 5, width: size.width - 22, height: ceil(fitting.height))
+        background.addSubview(label)
+        var origin = insideWindow
+            ? CGPoint(x: anchor.midX - size.width / 2, y: anchor.minY + 84)
+            : CGPoint(x: anchor.minX, y: anchor.maxY + 6)
+        let visible = screen.visibleFrame
+        if !insideWindow, origin.y + size.height > visible.maxY { origin.y = anchor.minY - size.height - 6 }
+        origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - size.width - 4)
+        origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - size.height - 4)
+        panel.contentView = background
+        panel.setFrame(CGRect(origin: origin, size: size), display: true)
+        panel.orderFrontRegardless()
+    }
+
     func hide() { panel.orderOut(nil) }
 }
 
