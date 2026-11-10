@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import AppKit
 @testable import QuietTypeCore
 
 @Test func acceptsRussianWordWithoutBreakingSpacing() {
@@ -56,4 +57,16 @@ import Foundation
     #expect(PrivacyGate.isExcluded(bundleID: "com.1password.1password", custom: []))
     #expect(PrivacyGate.isExcluded(bundleID: "com.apple.mail", custom: ["com.apple.mail"]))
     #expect(!PrivacyGate.isExcluded(bundleID: "com.apple.mail.other", custom: ["com.apple.mail2"]))
+}
+
+@Test func readsActualAXFontInsteadOfGuessingFromCaretHeight() {
+    let style = HostTextStyle(attributes: [NSAttributedString.Key("AXFont"):
+        ["AXFontName": "Helvetica", "AXFontSize": NSNumber(value: 17)]], caretHeight: 12)
+    #expect(style.font.pointSize == 17)
+    #expect(style.font.familyName == "Helvetica")
+}
+
+@Test func preservesNativeAttributedFont() {
+    let style = HostTextStyle(attributes: [.font: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)], caretHeight: 20)
+    #expect(style.font.pointSize == 14)
 }
