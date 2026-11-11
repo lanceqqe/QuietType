@@ -36,8 +36,12 @@ public struct DecodingProfile: Sendable {
     public var firstFloor: Float
     public var wordFloor: Float
     public var innerFloor: Float
-    public init(firstFloor: Float, wordFloor: Float, innerFloor: Float) {
+    /// Words offered before `wordFloor` starts to apply: a short guess is cheap to ignore,
+    /// only the tail of a long suggestion has to be earned by confidence.
+    public var freeWords: Int
+    public init(firstFloor: Float, wordFloor: Float, innerFloor: Float, freeWords: Int = 3) {
         self.firstFloor = firstFloor; self.wordFloor = wordFloor; self.innerFloor = innerFloor
+        self.freeWords = freeWords
     }
 }
 
@@ -303,7 +307,9 @@ public actor LocalModel {
                 if stopTokens.contains(pick.id) { break }
                 // A doubtful token ends the suggestion at the last finished word.
                 let startsWord = pick.piece.first?.isWhitespace == true
-                let floor = free == 0 && healed == 0 ? profile.firstFloor : (startsWord ? profile.wordFloor : profile.innerFloor)
+                let floor: Float = if free == 0 && healed == 0 { profile.firstFloor }
+                    else if startsWord { publishedWordCount < profile.freeWords ? 0 : profile.wordFloor }
+                    else { profile.innerFloor }
                 if pick.probability < floor { cutShort = !startsWord; break }
                 free += 1
                 generated.append(pick.id)

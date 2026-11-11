@@ -98,3 +98,9 @@ Verified:
 Not verified:
 - The recognised text itself was not inspected (it is never logged), only its length and timing.
 - Quality of suggestions with real screen text in everyday use; Safari and Mail were only probed for the amount of exposed text.
+
+## 0.3.2: longer suggestions (11 November 2026)
+
+- Up to 6 words (3 when constrained). The first three words are no longer cut by `wordFloor`; `firstFloor` 0.3 → 0.2, `innerFloor` 0.2 → 0.1.
+- Gemma's probability estimate (an upper bound from the argmax head) is bunched: floors between 0 and 0.25 give identical output on 16 phrases, 0.3 cuts most suggestions to 1–2 words. So the cut is now positional rather than a finer threshold.
+- Cost, seen on the same phrases: without screen context or style memory the longer tail is often invented ("Я сегодня не смогу, потому что " → "у меня сегодня день рождения!"). Calls 70–310 ms.
