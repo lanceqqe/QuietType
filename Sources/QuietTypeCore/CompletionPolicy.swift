@@ -110,8 +110,9 @@ public struct EnergyPolicy: Sendable {
         // Inference is cancellable and takes ~15 ms per token, so the pause only has to
         // absorb fast typing bursts; typed-through suggestions never wait for it.
         debounceMilliseconds = constrained ? 400 : (mode == .responsive ? 50 : 110)
-        maxTokens = constrained ? 8 : 16
-        maxWords = constrained ? 2 : 3
+        // A suggestion still ends early at the first doubtful word or the end of a sentence.
+        maxTokens = constrained ? 12 : 28
+        maxWords = constrained ? 3 : 6
         contextCharacters = constrained ? 300 : 900
         allowsAutomatic = thermal != .critical
     }

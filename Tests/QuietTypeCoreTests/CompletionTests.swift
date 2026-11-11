@@ -16,7 +16,7 @@ import AppKit
 }
 
 @Test func energyPoliciesBoundWork() {
-    #expect(EnergyPolicy(mode: .automatic, lowPower: true, thermal: .nominal).maxTokens == 8)
+    #expect(EnergyPolicy(mode: .automatic, lowPower: true, thermal: .nominal).maxTokens == 12)
     #expect(EnergyPolicy(mode: .responsive, lowPower: false, thermal: .critical).allowsAutomatic == false)
     let economy = EnergyPolicy(mode: .economy, lowPower: false, thermal: .nominal)
     let normal = EnergyPolicy(mode: .automatic, lowPower: false, thermal: .nominal)

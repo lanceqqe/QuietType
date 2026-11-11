@@ -548,7 +548,7 @@ final class TypingService {
                     return
                 }
                 // The user's own habit comes first; the model fills in where there is none.
-                if state.memoryEnabled, let own = state.memory.continuation(of: field.prefix, maxWords: policy.maxWords) {
+                if state.memoryEnabled, let own = state.memory.continuation(of: field.prefix, maxWords: min(3, policy.maxWords)) {
                     state.log("memory: \(own.count) chars")
                     cache.insert(own, for: field.prefix)
                     publish(own, field: field, id: id)

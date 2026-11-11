@@ -219,7 +219,7 @@ public actor LocalModel {
     ) throws -> (text: String, tokens: Int)? {
         guard let tokenizer else { throw ModelFailure.missingFiles }
         let budget = min(32, max(1, maxTokens))
-        let wordLimit = min(4, max(1, maxWords))
+        let wordLimit = min(8, max(1, maxWords))
         let healingBudget = 12
         var tokens = tokenizer.encode(text: context, addSpecialTokens: false)
         // The user's own phrases go in front as plain text: a fixed block, so the KV cache

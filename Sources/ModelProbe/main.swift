@@ -43,7 +43,7 @@ print("Loaded \(directory.lastPathComponent) in \(start.duration(to: .now)); com
 if arguments.first == "--try" {
     // Ad-hoc check: complete each given phrase, or keep accepting words with --loop.
     for phrase in arguments.dropFirst() where phrase != "--loop" {
-        let result = try await model.complete(prefix: phrase, memory: memory, screen: screen, maxTokens: 16)
+        let result = try await model.complete(prefix: phrase, memory: memory, screen: screen, maxTokens: 28, maxWords: 6)
         print("\(phrase)│\(result.text)│ \(Int(result.milliseconds)) ms / \(result.tokenCount) tokens / reused \(result.reusedTokens)")
         guard arguments.contains("--loop") else { continue }
         var text = phrase
