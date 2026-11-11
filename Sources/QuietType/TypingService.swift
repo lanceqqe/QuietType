@@ -43,6 +43,9 @@ final class TypingService {
     private var written = TypedBuffer()
     private var frontBundle = ""
     private var styleCard = ""
+    /// Text visible above the focused field; memory only, replaced on focus and after a send.
+    private var screenContext = ""
+    private var screenTask: Task<Void, Never>?
     private let syntheticEventTag: Int64 = 0x51545950
 
     init(state: AppState) { self.state = state }
@@ -166,6 +169,8 @@ final class TypingService {
         }
         // Dismiss before the host processes a key, so Tab can never take an old suggestion.
         dismiss()
+        // After a send the conversation on screen has changed.
+        if key == 36 || key == 76 { refreshScreen(after: 800) }
         if typedKey == .reset || observedField == nil || IsSecureEventInputEnabled() { commitWritten() }
         else if state.memoryEnabled { written.apply(typedKey) }
         guard state.enabled, state.modelReady else { return false }
@@ -184,6 +189,22 @@ final class TypingService {
             }
         }
         return false
+    }
+
+    private func refreshScreen(after delay: Int) {
+        screenTask?.cancel()
+        guard state.screenEnabled, state.enabled, let element = observedField,
+              let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { screenContext = ""; return }
+        nonisolated(unsafe) let field = element
+        screenTask = Task { [weak self] in
+            guard (try? await Task.sleep(for: .milliseconds(delay))) != nil else { return }
+            let started = ContinuousClock.now
+            let reading = await ScreenReader.read(element: field, pid: pid, allowCapture: true)
+            guard let self, !Task.isCancelled, let now = observedField, CFEqual(now, field) else { return }
+            if reading.text != screenContext { screenContext = reading.text; cache.clear() }
+            let elapsed = started.duration(to: .now).components
+            state.log("screen: \(reading.text.count) chars via \(reading.source) in \(Int(elapsed.seconds) * 1000 + Int(elapsed.attoseconds / 1_000_000_000_000_000)) ms")
+        }
     }
 
     /// Hands the finished fragment to the style memory.
@@ -251,6 +272,7 @@ final class TypingService {
         observedField = nil
         keystrokeMode = false
         insertsByTyping = false
+        screenTask?.cancel(); screenContext = ""
         guard let observer else { return } // No observer: excluded app or no permission.
         guard let target = focusedTarget() else {
             if state.enabled, let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
@@ -273,6 +295,7 @@ final class TypingService {
             ancestor = unsafeDowncast(parent, to: AXUIElement.self)
             if attribute(ancestor, kAXRoleAttribute) as? String == "AXWebArea" { insertsByTyping = true; break }
         }
+        refreshScreen(after: 150)
         schedule(manual: false)
     }
 
@@ -528,7 +551,8 @@ final class TypingService {
                     return
                 }
                 current = field
-                let result = try await state.engine.complete(prefix: field.prefix, memory: state.memoryEnabled ? styleCard : "", maxTokens: policy.maxTokens, maxWords: policy.maxWords) { [weak self] partial in
+                let result = try await state.engine.complete(prefix: field.prefix, memory: state.memoryEnabled ? styleCard : "",
+                                                             screen: state.screenEnabled ? screenContext : "", maxTokens: policy.maxTokens, maxWords: policy.maxWords) { [weak self] partial in
                     Task { @MainActor in self?.publishPartial(partial, id: id) }
                 }
                 try Task.checkCancellation()

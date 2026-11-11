@@ -191,3 +191,25 @@ import AppKit
     #expect(!AppVersion.isNewer("0.1.9", than: "0.2.0"))
     #expect(!AppVersion.isNewer("latest", than: "0.2.0"))
 }
+
+@Test func screenTextKeepsTheConversationAboveTheField() {
+    let field = CGRect(x: 300, y: 800, width: 600, height: 40)
+    func piece(_ text: String, _ x: CGFloat, _ y: CGFloat) -> ScreenText.Fragment {
+        .init(text: text, frame: CGRect(x: x, y: y, width: 200, height: 18))
+    }
+    let text = ScreenText.assemble([
+        piece("мангал", 520, 700), piece("с тебя уголь и", 310, 701),   // one row, out of order
+        piece("ты в субботу свободен?", 310, 660),
+        piece("Список чатов", 20, 660),                                  // sidebar, another column
+        piece("Отправить", 310, 850),                                    // below the field
+    ], field: field)
+    #expect(text == "ты в субботу свободен?\nс тебя уголь и мангал")
+}
+
+@Test func screenTextIsCutToTheLinesNearestTheField() {
+    let field = CGRect(x: 0, y: 5_000, width: 600, height: 40)
+    let fragments = (0..<50).map { ScreenText.Fragment(text: "строка номер \($0)", frame: CGRect(x: 10, y: CGFloat($0) * 20, width: 200, height: 18)) }
+    let text = ScreenText.assemble(fragments, field: field, limit: 100)
+    #expect(text.count <= 100 && text.hasSuffix("строка номер 49") && text.hasPrefix("строка номер"))
+    #expect(ScreenText.assemble([.init(text: "password: hunter22", frame: CGRect(x: 10, y: 10, width: 100, height: 18))], field: field).isEmpty)
+}

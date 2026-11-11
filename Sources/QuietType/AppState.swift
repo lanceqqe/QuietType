@@ -83,6 +83,17 @@ final class AppState {
         didSet { UserDefaults.standard.set(memoryEnabled, forKey: "styleMemory"); onPause?() }
     }
     private(set) var memory = StyleMemory()
+    /// Lets the model read what is visible above the field (a chat, a letter). Off by default.
+    var screenEnabled: Bool {
+        didSet { UserDefaults.standard.set(screenEnabled, forKey: "screenContext"); onPause?() }
+    }
+    var screenCaptureGranted = CGPreflightScreenCaptureAccess()
+    func requestScreenCapture() {
+        screenCaptureGranted = CGRequestScreenCaptureAccess()
+        if !screenCaptureGranted {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+        }
+    }
     nonisolated static let memoryURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("QuietType/Memory/style.json")
 
@@ -107,6 +118,7 @@ final class AppState {
 
     init() {
         memoryEnabled = UserDefaults.standard.bool(forKey: "styleMemory")
+        screenEnabled = UserDefaults.standard.bool(forKey: "screenContext")
         if let data = try? Data(contentsOf: Self.memoryURL),
            let saved = try? JSONDecoder().decode(StyleMemory.self, from: data) { memory = saved }
         energyMode = EnergyMode(rawValue: UserDefaults.standard.string(forKey: "energyMode") ?? "") ?? .automatic
@@ -214,6 +226,7 @@ final class AppState {
 
     func refreshPermissions() {
         accessibilityGranted = AXIsProcessTrusted()
+        screenCaptureGranted = CGPreflightScreenCaptureAccess()
         onPermissionsChanged?()
     }
 

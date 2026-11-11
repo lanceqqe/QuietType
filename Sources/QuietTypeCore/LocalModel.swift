@@ -59,6 +59,7 @@ public actor LocalModel {
     private var promptCandidates: (length: Int, candidates: Candidates)?
     /// Tokens of the last style sample, so an unchanged one is not tokenized per keystroke.
     private var memoryTokens: (text: String, tokens: [Int]) = ("", [])
+    private var screenTokens: (text: String, tokens: [Int]) = ("", [])
     private var ids: MLMultiArray?
     private var positions: MLMultiArray?
     private var mask: MLMultiArray?
@@ -67,8 +68,8 @@ public actor LocalModel {
     private var batchMask: MLMultiArray?
     /// Width of the causal mask the model was converted with.
     private var maskWidth = 512
-    /// Tokens actually used. Capped at 512: enough for the 900-character window, and the
-    /// range in which every supported conversion works without KV rotation.
+    /// Tokens actually used: style sample, screen text and the 900-character field window.
+    /// Capped at 1024, where the conversion works without KV rotation.
     private var contextLength = 512
     private let batch = 64
     /// Where the loaded model runs; empty until loaded.
@@ -150,7 +151,7 @@ public actor LocalModel {
             guard headOutputs.allSatisfy(outputs.contains) else { throw ModelFailure.incompatibleModel }
         }
         maskWidth = width
-        contextLength = min(512, width)
+        contextLength = min(1024, width)
         stopTokens = Set(["<|endoftext|>", "<|im_end|>", "<eos>", "<end_of_turn>"]
             .compactMap(localTokenizer.convertTokenToId) + [localTokenizer.eosTokenId].compactMap { $0 })
         // Gemma expects its BOS token in front of raw text; Qwen has none.
@@ -188,7 +189,7 @@ public actor LocalModel {
     }
 
     public func complete(
-        prefix: String, memory: String = "", maxTokens: Int, maxWords: Int = 3,
+        prefix: String, memory: String = "", screen: String = "", maxTokens: Int, maxWords: Int = 3,
         onPartial: (@Sendable (String) -> Void)? = nil
     ) throws -> InferenceResult {
         guard tokenizer != nil, !chunks.isEmpty else { throw ModelFailure.missingFiles }
@@ -198,11 +199,11 @@ public actor LocalModel {
         var reused = 0
         var outcome: (text: String, tokens: Int)?
         if let split = CompletionText.healingSplit(prefix) {
-            outcome = try generate(context: split.stable, memory: memory, target: split.target, maxTokens: maxTokens,
+            outcome = try generate(context: split.stable, memory: memory, screen: screen, target: split.target, maxTokens: maxTokens,
                                    maxWords: maxWords, reused: &reused, onPartial: onPartial)
         }
         if outcome == nil {
-            outcome = try generate(context: prefix, memory: memory, target: "", maxTokens: maxTokens,
+            outcome = try generate(context: prefix, memory: memory, screen: screen, target: "", maxTokens: maxTokens,
                                    maxWords: maxWords, reused: &reused, onPartial: onPartial)
         }
         let elapsed = start.duration(to: .now)
@@ -213,7 +214,7 @@ public actor LocalModel {
 
     /// Returns nil only when `target` could not be reproduced by the model's top candidates.
     private func generate(
-        context: String, memory: String, target: String, maxTokens: Int, maxWords: Int, reused: inout Int,
+        context: String, memory: String, screen: String, target: String, maxTokens: Int, maxWords: Int, reused: inout Int,
         onPartial: (@Sendable (String) -> Void)?
     ) throws -> (text: String, tokens: Int)? {
         guard let tokenizer else { throw ModelFailure.missingFiles }
@@ -227,7 +228,13 @@ public actor LocalModel {
             let encoded = memory.isEmpty ? [] : tokenizer.encode(text: memory + "\n\n", addSpecialTokens: false)
             memoryTokens = (memory, Array(encoded.suffix(176)))
         }
-        let fixed = leadingTokens + memoryTokens.tokens
+        // What is on screen above the field (the conversation being answered) comes next:
+        // it changes more often than the style sample, so it sits after it.
+        if screen != screenTokens.text {
+            let encoded = screen.isEmpty ? [] : tokenizer.encode(text: screen + "\n\n", addSpecialTokens: false)
+            screenTokens = (screen, Array(encoded.suffix(288)))
+        }
+        let fixed = leadingTokens + memoryTokens.tokens + screenTokens.tokens
         let room = contextLength - budget - healingBudget - fixed.count
         if tokens.count > room {
             // Drop whole blocks so the window start (and the KV cache) stays put while typing.

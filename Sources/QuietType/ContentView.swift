@@ -3,7 +3,7 @@ import SwiftUI
 import QuietTypeCore
 
 private enum Pane: String, CaseIterable, Identifiable {
-    case overview = "Обзор", writing = "Проверка текста", model = "Модель", energy = "Энергия", memory = "Почерк", applications = "Приложения"
+    case overview = "Обзор", writing = "Проверка текста", model = "Модель", energy = "Энергия", memory = "Почерк и контекст", applications = "Приложения"
     var id: Self { self }
     var symbol: String {
         switch self {
@@ -87,7 +87,7 @@ struct ContentView: View {
         case .writing: "Попробуйте локальную модель перед работой в других приложениях."
         case .model: "Собственная языковая модель. Apple Intelligence не требуется."
         case .energy: "Меньше вычислений во время набора. Никакой генерации в простое."
-        case .memory: "Подсказки вашими словами: QuietType запоминает, как вы пишете."
+        case .memory: "Подсказки вашими словами и по ситуации: ваш почерк и то, что сейчас на экране."
         case .applications: "Вы решаете, где появляются подсказки."
         }
     }
@@ -277,11 +277,24 @@ struct ContentView: View {
                     Button("Забыть всё", role: .destructive) { state.forgetMemory() }.disabled(state.memory.isEmpty)
                 }
             }
+            Section("Контекст экрана") {
+                Toggle("Учитывать текст над полем ввода", isOn: $state.screenEnabled)
+                Text("Перед подсказкой QuietType читает то, что видно в окне над полем: переписку, письмо, на которое вы отвечаете. Текст используется только для текущей подсказки, не сохраняется и не попадает в память почерка.")
+                    .font(.callout).foregroundStyle(.secondary)
+                if state.screenEnabled {
+                    LabeledContent("Запись экрана") {
+                        if state.screenCaptureGranted { Text("Разрешена").foregroundStyle(.secondary) }
+                        else { Button("Разрешить…") { state.requestScreenCapture() } }
+                    }
+                    Text("Нужна только приложениям, которые скрывают текст окна, например Telegram: QuietType делает снимок области над полем, распознаёт текст на этом Mac и сразу отбрасывает снимок. После выдачи разрешения перезапустите QuietType.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
             Section {
                 Text("Память лежит в одном файле на этом Mac и никуда не отправляется. Вставленный текст, пароли, числа, ссылки и адреса не запоминаются; исключённые приложения и парольные поля не читаются.")
                 Text("Привычка появляется после нескольких повторов: обычно нужно пару дней обычной переписки.")
             }.foregroundStyle(.secondary)
-        }.formStyle(.grouped).scrollDisabled(true).frame(minHeight: 420)
+        }.formStyle(.grouped).frame(minHeight: 560)
     }
 
     private var applications: some View {

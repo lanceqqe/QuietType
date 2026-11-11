@@ -85,3 +85,14 @@ Not verified:
 - The Neural Engine load failure itself was reported from an M1 Pro on macOS 27.0 and not reproduced here; the fallback was exercised only by skipping the Neural Engine on an M5.
 - Gatekeeper's first-launch prompt (Gatekeeper is disabled on the build machine).
 - Live learning from typing in other apps and the end-to-end self-update (needs a published newer release).
+
+## 0.3.0: screen context (11 November 2026)
+
+Verified:
+- 24 unit tests pass, including assembly of window text (column filter, row merging, cut to the lines nearest the field, secret filter).
+- `ModelProbe --screen <file>`: with a chat above the field, "Ок, уголь " → "и мангал, давай", "Привет! Да, " → "я свободен, и"; with a letter, "Hi Anna, thanks for the draft. " → "I've reviewed section". Calls 97–207 ms; the default probe (warm/cold KV equality) still passes with the context limit raised to 1024 tokens.
+- Live, Claude desktop app: 488–592 characters read through Accessibility in 118–146 ms on focus.
+
+Not verified:
+- The picture-based path (ScreenCaptureKit + Vision) has not run: QuietType had no Screen Recording permission on the test Mac. Telegram exposes only 7 characters through Accessibility, so screen context there depends on this path.
+- Quality of suggestions with real screen text in everyday use; Safari and Mail were only probed for the amount of exposed text.

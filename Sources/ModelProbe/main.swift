@@ -15,13 +15,17 @@ if arguments.first == "--install" {
 var directory = ModelAssets.directory
 var profile = ModelAssets.profile
 var memory = ""
+var screen = ""
 // `--no-ane` exercises the fallback used when Core ML rejects the model on the Neural Engine.
 var neuralEngine = true
 if arguments.first == "--no-ane" { neuralEngine = false; arguments.removeFirst() }
-while let option = arguments.first, ["--model", "--floors", "--memory"].contains(option), arguments.count >= 2 {
+while let option = arguments.first, ["--model", "--floors", "--memory", "--screen"].contains(option), arguments.count >= 2 {
     if option == "--memory" {
         // A file of the user's phrases, one per line: the style sample put before the text.
         memory = try String(contentsOfFile: arguments[1], encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+    } else if option == "--screen" {
+        // A file with the text visible above the field (a conversation, a letter).
+        screen = try String(contentsOfFile: arguments[1], encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
     } else if option == "--model" {
         directory = URL(fileURLWithPath: arguments[1])
     } else {
@@ -39,7 +43,7 @@ print("Loaded \(directory.lastPathComponent) in \(start.duration(to: .now)); com
 if arguments.first == "--try" {
     // Ad-hoc check: complete each given phrase, or keep accepting words with --loop.
     for phrase in arguments.dropFirst() where phrase != "--loop" {
-        let result = try await model.complete(prefix: phrase, memory: memory, maxTokens: 16)
+        let result = try await model.complete(prefix: phrase, memory: memory, screen: screen, maxTokens: 16)
         print("\(phrase)│\(result.text)│ \(Int(result.milliseconds)) ms / \(result.tokenCount) tokens / reused \(result.reusedTokens)")
         guard arguments.contains("--loop") else { continue }
         var text = phrase
