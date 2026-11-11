@@ -104,3 +104,13 @@ Not verified:
 - Up to 6 words (3 when constrained). The first three words are no longer cut by `wordFloor`; `firstFloor` 0.3 → 0.2, `innerFloor` 0.2 → 0.1.
 - Gemma's probability estimate (an upper bound from the argmax head) is bunched: floors between 0 and 0.25 give identical output on 16 phrases, 0.3 cuts most suggestions to 1–2 words. So the cut is now positional rather than a finer threshold.
 - Cost, seen on the same phrases: without screen context or style memory the longer tail is often invented ("Я сегодня не смогу, потому что " → "у меня сегодня день рождения!"). Calls 70–310 ms.
+
+## 0.3.3: the lead as a request, measured floors (11 November 2026)
+
+- Screen text and the style sample are wrapped in Gemma's chat turns as a request to finish the user's message; the field's text opens the model's own turn. Teacher-forced top-1 on the same texts: Russian 39.9 % → 42.4 %, English 43.0 % → 46.8 %. With a chat on screen the raw layout ended suggestions after one or two words (the model predicted the end of a short line, then a timestamp); the request does not.
+- `ModelProbe --eval` types 30 Russian messages word by word (282 positions after a word, 120 inside one) and compares the suggestion with what was written. Before: shown at 97 % of positions after a word, first word right 30 %, 106 right of 803 words offered. With `firstFloor` 0.65 (now also applied to the first word after a space), `wordFloor` 0.6, `innerFloor` 0.2, `freeWords` 1: shown 55 %, first word right 43 %, 87 right of 360. Inside a word: first word right 61 % → 69 %, 94 of 313 → 90 of 192.
+- The benchmark has no screen text or style sample; on it the request alone is not better than raw text (first word right 43 % against 49 % at the same floors, within the noise of 282 positions).
+
+Not verified:
+- Everyday use in real apps; the screen scenarios were hand-written files, not text read from a window.
+- Known misses: a word finished wrongly when the screen is off topic ("Отчёт скину" → "лся"), an occasional assistant-style reply ("Could you please send me the" → "message?").
