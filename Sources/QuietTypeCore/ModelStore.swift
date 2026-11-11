@@ -9,7 +9,9 @@ public enum ModelAssets {
     public static let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("QuietType/Models/Gemma3-1B")
     /// Calibrated on this model; another model needs its own floors (see docs/VALIDATION.md).
-    public static let profile = DecodingProfile(firstFloor: 0.2, wordFloor: 0.3, innerFloor: 0.1)
+    /// Measured with `ModelProbe --eval`: below these floors a guess is wrong far more often
+    /// than right, and nearly every word that turns out right clears them.
+    public static let profile = DecodingProfile(firstFloor: 0.65, wordFloor: 0.6, innerFloor: 0.2, freeWords: 1)
     public struct Asset: Sendable {
         public let path: String
         public let size: Int64

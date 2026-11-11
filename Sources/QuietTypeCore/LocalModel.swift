@@ -18,6 +18,9 @@ public struct InferenceResult: Sendable {
     public let tokenCount: Int
     public let milliseconds: Double
     public let reusedTokens: Int
+    public init(text: String, tokenCount: Int, milliseconds: Double, reusedTokens: Int) {
+        self.text = text; self.tokenCount = tokenCount; self.milliseconds = milliseconds; self.reusedTokens = reusedTokens
+    }
 }
 
 /// Highest-scoring next tokens, best first, with the log-normaliser of the distribution
@@ -62,8 +65,9 @@ public actor LocalModel {
     private var processed: [Int] = []
     private var promptCandidates: (length: Int, candidates: Candidates)?
     /// Tokens of the last style sample, so an unchanged one is not tokenized per keystroke.
-    private var memoryTokens: (text: String, tokens: [Int]) = ("", [])
-    private var screenTokens: (text: String, tokens: [Int]) = ("", [])
+    private var leadTokens: (text: String, chat: Bool, tokens: [Int]) = ("", false, [])
+    /// Gemma's turn markers; nil for models without them, which get the lead as plain text.
+    private var turnTokens: (start: Int, end: Int)?
     private var ids: MLMultiArray?
     private var positions: MLMultiArray?
     private var mask: MLMultiArray?
@@ -72,7 +76,7 @@ public actor LocalModel {
     private var batchMask: MLMultiArray?
     /// Width of the causal mask the model was converted with.
     private var maskWidth = 512
-    /// Tokens actually used: style sample, screen text and the 900-character field window.
+    /// Tokens actually used: the lead and the 900-character field window.
     /// Capped at 1024, where the conversion works without KV rotation.
     private var contextLength = 512
     private let batch = 64
@@ -160,6 +164,9 @@ public actor LocalModel {
             .compactMap(localTokenizer.convertTokenToId) + [localTokenizer.eosTokenId].compactMap { $0 })
         // Gemma expects its BOS token in front of raw text; Qwen has none.
         leadingTokens = localTokenizer.convertTokenToId("<bos>").map { [$0] } ?? []
+        if let start = localTokenizer.convertTokenToId("<start_of_turn>"), let end = localTokenizer.convertTokenToId("<end_of_turn>") {
+            turnTokens = (start, end)
+        }
         self.profile = profile
         embeddings = embeddingModel
         head = headModel
@@ -193,7 +200,7 @@ public actor LocalModel {
     }
 
     public func complete(
-        prefix: String, memory: String = "", screen: String = "", maxTokens: Int, maxWords: Int = 3,
+        prefix: String, lead: String = "", chat: Bool = true, maxTokens: Int, maxWords: Int = 3,
         onPartial: (@Sendable (String) -> Void)? = nil
     ) throws -> InferenceResult {
         guard tokenizer != nil, !chunks.isEmpty else { throw ModelFailure.missingFiles }
@@ -203,11 +210,11 @@ public actor LocalModel {
         var reused = 0
         var outcome: (text: String, tokens: Int)?
         if let split = CompletionText.healingSplit(prefix) {
-            outcome = try generate(context: split.stable, memory: memory, screen: screen, target: split.target, maxTokens: maxTokens,
+            outcome = try generate(context: split.stable, lead: lead, chat: chat, target: split.target, maxTokens: maxTokens,
                                    maxWords: maxWords, reused: &reused, onPartial: onPartial)
         }
         if outcome == nil {
-            outcome = try generate(context: prefix, memory: memory, screen: screen, target: "", maxTokens: maxTokens,
+            outcome = try generate(context: prefix, lead: lead, chat: chat, target: "", maxTokens: maxTokens,
                                    maxWords: maxWords, reused: &reused, onPartial: onPartial)
         }
         let elapsed = start.duration(to: .now)
@@ -216,29 +223,59 @@ public actor LocalModel {
                                milliseconds: milliseconds, reusedTokens: reused)
     }
 
+    /// Share of next tokens of `text` the model ranks first, fed token by token as it is typed.
+    /// A calibration tool for ModelProbe: it compares models by number instead of by eye.
+    public func score(_ text: String, lead: String = "", chat: Bool = true) throws -> (tokens: Int, top1: Double) {
+        guard let tokenizer else { throw ModelFailure.missingFiles }
+        let fixed = try fixedTokens(lead: lead, chat: chat)
+        let tokens = Array((fixed + tokenizer.encode(text: text, addSpecialTokens: false)).prefix(contextLength))
+        guard tokens.count > fixed.count else { throw ModelFailure.emptyContext }
+        resetContext()
+        defer { resetContext() }
+        var hits = 0
+        for position in 0..<(tokens.count - 1) {
+            let best = try predict(tokens[position], at: position).ids.first
+            if position >= fixed.count - 1, best == tokens[position + 1] { hits += 1 }
+        }
+        let scored = tokens.count - fixed.count
+        return (scored, Double(hits) / Double(scored))
+    }
+
+    /// Everything in front of the field's text: BOS and the lead (what the user is looking
+    /// at, how they write). A fixed block, so its KV cache survives from one request to the next.
+    /// An instruction-tuned model reads the lead as a request and continues the field's text
+    /// as its own answer, which keeps it from carrying on the lead itself.
+    private func fixedTokens(lead: String, chat: Bool) throws -> [Int] {
+        guard let tokenizer else { throw ModelFailure.missingFiles }
+        if lead != leadTokens.text || chat != leadTokens.chat {
+            var tokens: [Int] = []
+            if !lead.isEmpty {
+                if chat, let turn = turnTokens {
+                    tokens = [turn.start] + tokenizer.encode(text: "user\n" + lead, addSpecialTokens: false) + [turn.end]
+                        + tokenizer.encode(text: "\n", addSpecialTokens: false) + [turn.start]
+                        + tokenizer.encode(text: "model\n", addSpecialTokens: false)
+                } else {
+                    tokens = tokenizer.encode(text: lead + "\n\n", addSpecialTokens: false)
+                }
+            }
+            leadTokens = (lead, chat, tokens)
+        }
+        return leadingTokens + leadTokens.tokens
+    }
+
     /// Returns nil only when `target` could not be reproduced by the model's top candidates.
     private func generate(
-        context: String, memory: String, screen: String, target: String, maxTokens: Int, maxWords: Int, reused: inout Int,
+        context: String, lead: String, chat: Bool, target: String, maxTokens: Int, maxWords: Int, reused: inout Int,
         onPartial: (@Sendable (String) -> Void)?
     ) throws -> (text: String, tokens: Int)? {
         guard let tokenizer else { throw ModelFailure.missingFiles }
-        let budget = min(32, max(1, maxTokens))
-        let wordLimit = min(8, max(1, maxWords))
+        let budget = min(48, max(1, maxTokens))
+        let wordLimit = min(12, max(1, maxWords))
         let healingBudget = 12
         var tokens = tokenizer.encode(text: context, addSpecialTokens: false)
-        // The user's own phrases go in front as plain text: a fixed block, so the KV cache
-        // of it survives from one request to the next.
-        if memory != memoryTokens.text {
-            let encoded = memory.isEmpty ? [] : tokenizer.encode(text: memory + "\n\n", addSpecialTokens: false)
-            memoryTokens = (memory, Array(encoded.suffix(176)))
-        }
-        // What is on screen above the field (the conversation being answered) comes next:
-        // it changes more often than the style sample, so it sits after it.
-        if screen != screenTokens.text {
-            let encoded = screen.isEmpty ? [] : tokenizer.encode(text: screen + "\n\n", addSpecialTokens: false)
-            screenTokens = (screen, Array(encoded.suffix(288)))
-        }
-        let fixed = leadingTokens + memoryTokens.tokens + screenTokens.tokens
+        var fixed = try fixedTokens(lead: lead, chat: chat)
+        // A lead that would crowd out the field's own text is dropped whole.
+        if fixed.count > contextLength - 320 { fixed = leadingTokens }
         let room = contextLength - budget - healingBudget - fixed.count
         if tokens.count > room {
             // Drop whole blocks so the window start (and the KV cache) stays put while typing.
@@ -283,6 +320,10 @@ public actor LocalModel {
         }
         reused = max(reused, common)
 
+        let typedLine = String((context + target).suffix(160).split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).last ?? "")
+        let leadLines = lead.lowercased().split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+        let foreignContext = Self.hasForeignLetters(context + target)
+        let typedLetters = (context + target).reversed().prefix(while: \.isLetter).count
         var generated: [Int] = []
         var remainder = target
         var healed = 0
@@ -297,14 +338,36 @@ public actor LocalModel {
         while true {
             try Task.checkCancellation()
             if !remainder.isEmpty {
-                guard healed < healingBudget, let pick = forced(candidates, remainder: remainder) else { return nil }
+                // A token may run past the typed fragment (finish the word), except when the
+                // fragment is one or two letters: that is usually a word of its own.
+                let mayExtend = typedLetters >= 3 || !remainder.contains(where: \.isLetter)
+                guard healed < healingBudget, let pick = forced(candidates, remainder: remainder, mayExtend: mayExtend) else { return nil }
+                // A token that runs past what was typed is the model's first guess, and has
+                // to be as sure as any other first token.
+                if pick.piece.count > remainder.count, pick.probability < profile.firstFloor { return ("", generated.count) }
                 remainder = String(remainder.dropFirst(pick.piece.count))
                 healed += 1
                 generated.append(pick.id)
             } else {
                 guard free < budget else { cutShort = true; break }
-                guard let pick = choose(candidates, history: Array(processed.dropFirst(fixed.count))) else { cutShort = true; break }
+                guard var pick = choose(candidates, history: Array(processed.dropFirst(fixed.count))) else { cutShort = true; break }
+                // One or two typed letters are usually a whole word ("в", "на", "да"): offer
+                // what follows it rather than stretching it into another word.
+                if free == 0, (1...2).contains(typedLetters), pick.piece.first?.isLetter == true {
+                    guard let next = candidates.ids.indices.lazy.map({ (id: candidates.ids[$0],
+                        probability: exp(candidates.logits[$0] - candidates.logSum), piece: tokenizer.decode(tokens: [candidates.ids[$0]])) })
+                        .first(where: { $0.piece.first.map { !$0.isLetter && !$0.isNumber } == true }) else { break }
+                    pick = next
+                }
                 if stopTokens.contains(pick.id) { break }
+                // Numbers are guesses (a time, a count copied from the screen), and a hyphen
+                // glued to a finished word ("что" → "что-то") rewrites what the user meant.
+                // So is a word in a script the user is not writing in.
+                if pick.piece.contains(where: \.isNumber) || (free == 0 && pick.piece.hasPrefix("-"))
+                    || (!foreignContext && Self.hasForeignLetters(pick.piece)) {
+                    cutShort = pick.piece.first?.isWhitespace != true
+                    break
+                }
                 // A doubtful token ends the suggestion at the last finished word.
                 let startsWord = pick.piece.first?.isWhitespace == true
                 let floor: Float = if free == 0 && healed == 0 { profile.firstFloor }
@@ -319,6 +382,12 @@ public actor LocalModel {
                 guard let shown = display(text) else { return nil }
                 if shown.contains(where: \.isNewline) { break }
                 if !text.contains("�") {
+                    // A message that repeats a line of the lead from its first word is the
+                    // other person's line read back, not what the user is about to write.
+                    let message = (typedLine + shown).trimmingCharacters(in: .whitespaces).lowercased()
+                    if free > 0, message.split(separator: " ").count >= 3, leadLines.contains(where: { $0.hasPrefix(message) }) {
+                        return ("", generated.count)
+                    }
                     accepted = shown
                     let partial = CompletionText.firstWords(CompletionText.finished(shown, reachedLimit: true), count: wordLimit)
                     let wordCount = partial.split(whereSeparator: \.isWhitespace).count
@@ -339,15 +408,27 @@ public actor LocalModel {
         return (CompletionText.firstWords(finished, count: wordLimit), generated.count)
     }
 
+    /// Letters outside Latin and Cyrillic: a suggestion in Thai for a Russian message is noise.
+    private static func hasForeignLetters(_ text: String) -> Bool {
+        text.unicodeScalars.contains { $0.properties.isAlphabetic && $0.value > 0x52F && !(0x1E00...0x1EFF).contains($0.value) }
+    }
+
     /// Best candidate that agrees with the text the user already typed.
-    private func forced(_ candidates: Candidates, remainder: String) -> (id: Int, piece: String)? {
+    private func forced(_ candidates: Candidates, remainder: String, mayExtend: Bool) -> (id: Int, piece: String, probability: Float)? {
         guard let tokenizer else { return nil }
-        for id in candidates.ids {
+        var best: (id: Int, piece: String, logit: Float)?
+        // Probability among the candidates that agree with the typed text: the rest are ruled out.
+        var mass: Float = 0
+        for (index, id) in candidates.ids.enumerated() {
             let piece = tokenizer.decode(tokens: [id])
             guard !piece.isEmpty, !piece.contains("�") else { continue }
-            if remainder.hasPrefix(piece) || piece.hasPrefix(remainder) { return (id, piece) }
+            if remainder.hasPrefix(piece) || (mayExtend && piece.hasPrefix(remainder)) {
+                if best == nil { best = (id, piece, candidates.logits[index]) }
+                mass += exp(candidates.logits[index] - candidates.logSum)
+            }
         }
-        return nil
+        guard let best else { return nil }
+        return (best.id, best.piece, exp(best.logit - candidates.logSum) / mass)
     }
 
     /// Greedy choice that refuses to walk into a loop already present in the text.

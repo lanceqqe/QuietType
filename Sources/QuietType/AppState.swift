@@ -169,7 +169,7 @@ final class AppState {
                 log("model: loaded in \(started.duration(to: .now).components.seconds) s")
                 // The first call compiles kernels (tens of seconds on the GPU fallback);
                 // pay for it now instead of on the user's first suggestion.
-                _ = try? await engine.complete(prefix: "Привет, как", maxTokens: 2)
+                _ = try? await engine.complete(prefix: "Привет, как", lead: CompletionPrompt.lead(), maxTokens: 2)
                 await engine.resetContext()
                 log("model: ready on \(computeUnits)")
                 modelReady = true
@@ -245,7 +245,7 @@ final class AppState {
             defer { if playgroundRequestID == id { playgroundBusy = false } }
             do {
                 if afterDelay { try await Task.sleep(for: .milliseconds(delay)) }
-                let result = try await engine.complete(prefix: prefix, maxTokens: tokens, maxWords: words)
+                let result = try await engine.complete(prefix: prefix, lead: CompletionPrompt.lead(), maxTokens: tokens, maxWords: words)
                 try Task.checkCancellation()
                 guard playgroundRequestID == id else { return }
                 playgroundSuggestion = result.text

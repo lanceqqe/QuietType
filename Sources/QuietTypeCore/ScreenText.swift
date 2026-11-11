@@ -11,6 +11,15 @@ public enum ScreenText {
         public init(text: String, frame: CGRect) { self.text = text; self.frame = frame }
     }
 
+    /// One piece of screen text without what the model would only parrot: message times,
+    /// delivery ticks, counters. Empty when nothing readable is left.
+    public static func clean(_ text: String) -> String {
+        let words = text.replacingOccurrences(of: #"\b\d{1,2}[:.]\d{2}(:\d{2})?\b|[✓✔☑]"#, with: " ", options: .regularExpression)
+            .split(whereSeparator: \.isWhitespace)
+        let line = words.joined(separator: " ")
+        return line.filter(\.isLetter).count >= 2 ? line : ""
+    }
+
     /// Keeps fragments above `field` and in its column, in reading order, and returns the
     /// `limit` characters closest to the field, starting at a line or word boundary.
     public static func assemble(_ fragments: [Fragment], field: CGRect, limit: Int = 600) -> String {
@@ -19,8 +28,8 @@ public enum ScreenText {
         for fragment in fragments {
             let frame = fragment.frame
             guard frame.midY < field.minY, frame.maxX > column.minX, frame.minX < column.maxX else { continue }
-            let text = fragment.text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-            if text.count >= 2 { rows.append((text, frame)) }
+            let text = clean(fragment.text)
+            if !text.isEmpty { rows.append((text, frame)) }
         }
         rows.sort { first, second in
             let sameRow = abs(first.frame.midY - second.frame.midY) <= 6

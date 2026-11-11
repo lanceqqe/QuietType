@@ -547,17 +547,23 @@ final class TypingService {
                     publish(cached, field: field, id: id)
                     return
                 }
-                // The user's own habit comes first; the model fills in where there is none.
-                if state.memoryEnabled, let own = state.memory.continuation(of: field.prefix, maxWords: min(3, policy.maxWords)) {
-                    state.log("memory: \(own.count) chars")
-                    cache.insert(own, for: field.prefix)
+                // The user's own habit comes first, and the model carries on from it.
+                var own = ""
+                if state.memoryEnabled, let habit = state.memory.continuation(of: field.prefix, maxWords: min(3, policy.maxWords)) {
+                    state.log("memory: \(habit.count) chars")
+                    own = habit
                     publish(own, field: field, id: id)
-                    return
                 }
                 current = field
-                let result = try await state.engine.complete(prefix: field.prefix, memory: state.memoryEnabled ? styleCard : "",
-                                                             screen: state.screenEnabled ? screenContext : "", maxTokens: policy.maxTokens, maxWords: policy.maxWords) { [weak self] partial in
-                    Task { @MainActor in self?.publishPartial(partial, id: id) }
+                let habit = own
+                let lead = CompletionPrompt.lead(style: state.memoryEnabled ? styleCard : "", screen: state.screenEnabled ? screenContext : "")
+                var result = try await state.engine.complete(prefix: field.prefix + own, lead: lead, maxTokens: policy.maxTokens,
+                                                             maxWords: policy.maxWords) { [weak self] partial in
+                    Task { @MainActor in self?.publishPartial(habit + partial, id: id) }
+                }
+                if !own.isEmpty {
+                    result = InferenceResult(text: own + result.text, tokenCount: result.tokenCount,
+                                             milliseconds: result.milliseconds, reusedTokens: result.reusedTokens)
                 }
                 try Task.checkCancellation()
                 guard requestID == id else { return }

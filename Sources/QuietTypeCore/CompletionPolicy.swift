@@ -111,8 +111,8 @@ public struct EnergyPolicy: Sendable {
         // absorb fast typing bursts; typed-through suggestions never wait for it.
         debounceMilliseconds = constrained ? 400 : (mode == .responsive ? 50 : 110)
         // A suggestion still ends early at the first doubtful word or the end of a sentence.
-        maxTokens = constrained ? 12 : 28
-        maxWords = constrained ? 3 : 6
+        maxTokens = constrained ? 12 : 40
+        maxWords = constrained ? 3 : 10
         contextCharacters = constrained ? 300 : 900
         allowsAutomatic = thermal != .critical
     }
