@@ -200,7 +200,11 @@ final class TypingService {
             guard (try? await Task.sleep(for: .milliseconds(delay))) != nil else { return }
             let started = ContinuousClock.now
             let reading = await ScreenReader.read(element: field, pid: pid, allowCapture: true)
-            guard let self, !Task.isCancelled, let now = observedField, CFEqual(now, field) else { return }
+            guard let self else { return }
+            guard !Task.isCancelled, let now = observedField, CFEqual(now, field) else {
+                state.log("screen: read dropped, focus moved (\(reading.source))")
+                return
+            }
             if reading.text != screenContext { screenContext = reading.text; cache.clear() }
             let elapsed = started.duration(to: .now).components
             state.log("screen: \(reading.text.count) chars via \(reading.source) in \(Int(elapsed.seconds) * 1000 + Int(elapsed.attoseconds / 1_000_000_000_000_000)) ms")

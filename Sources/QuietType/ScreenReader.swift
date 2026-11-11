@@ -21,9 +21,14 @@ enum ScreenReader {
         if viaAccessibility.text.count >= 40 || !allowCapture || !CGPreflightScreenCaptureAccess() {
             return Reading(text: viaAccessibility.text, source: "ax")
         }
-        let recognised = (try? await recognisedText(pid: pid, field: viaAccessibility.field)) ?? ""
-        return recognised.count > viaAccessibility.text.count
-            ? Reading(text: recognised, source: "ocr") : Reading(text: viaAccessibility.text, source: "ax")
+        do {
+            let recognised = try await recognisedText(pid: pid, field: viaAccessibility.field)
+            return recognised.count > viaAccessibility.text.count
+                ? Reading(text: recognised, source: "ocr") : Reading(text: viaAccessibility.text, source: "ax, ocr found less")
+        } catch {
+            let detail = error as NSError
+            return Reading(text: viaAccessibility.text, source: "ax, ocr failed: \(detail.domain) \(detail.code)")
+        }
     }
 
     // MARK: Accessibility

@@ -93,6 +93,8 @@ Verified:
 - `ModelProbe --screen <file>`: with a chat above the field, "Ок, уголь " → "и мангал, давай", "Привет! Да, " → "я свободен, и"; with a letter, "Hi Anna, thanks for the draft. " → "I've reviewed section". Calls 97–207 ms; the default probe (warm/cold KV equality) still passes with the context limit raised to 1024 tokens.
 - Live, Claude desktop app: 488–592 characters read through Accessibility in 118–146 ms on focus.
 
+- Live, Telegram with Screen Recording granted: 465 characters recognised from the picture of the window in 493 ms (ScreenCaptureKit + Vision).
+
 Not verified:
-- The picture-based path (ScreenCaptureKit + Vision) has not run: QuietType had no Screen Recording permission on the test Mac. Telegram exposes only 7 characters through Accessibility, so screen context there depends on this path.
+- The recognised text itself was not inspected (it is never logged), only its length and timing.
 - Quality of suggestions with real screen text in everyday use; Safari and Mail were only probed for the amount of exposed text.
